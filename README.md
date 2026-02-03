@@ -9,6 +9,7 @@ This is the backend for the Nolt Admin application, built with Express, TypeScri
 - **Automatic User Creation**: Automatically creates a customer account if one doesn't exist upon login ("Find or Create").
 - **New Comer Tracking**: Tracks if a user is new via the `new_comer` flag.
 - **PostgreSQL Database**: Uses `postgres` (porsager) client for database interactions.
+- **API Documentation**: Interactive API docs via Swagger UI.
 
 ## Prerequisites
 
@@ -50,6 +51,11 @@ Start the development server:
 npm run dev
 ```
 The server will start at `http://localhost:5000`.
+
+## API Documentation
+Interactive API documentation is available via Swagger UI.
+After starting the server, visit:
+**`http://localhost:5000/api-docs`**
 
 ## API Endpoints
 
