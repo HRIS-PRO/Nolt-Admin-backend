@@ -3,6 +3,8 @@ import session from 'express-session';
 import passport from 'passport';
 import './config/passport.js'; // Import passport config
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import swaggerUi from 'swagger-ui-express';
+import swaggerSpec from './config/swagger.js';
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -35,6 +37,7 @@ app.get('/', (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
 app.listen(port, () => {

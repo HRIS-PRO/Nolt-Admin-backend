@@ -24,7 +24,9 @@
     "express-session": "^1.19.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "postgres": "^3.4.8"
+    "postgres": "^3.4.8",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
