@@ -1,5 +1,7 @@
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import { Strategy as LocalStrategy } from 'passport-local';
+import bcrypt from 'bcrypt';
 import sql from './db.js';
 
 interface Customer {
@@ -9,7 +11,46 @@ interface Customer {
     full_name: string;
     avatar_url: string;
     new_comer: boolean;
+    role: string;
+    password_hash?: string;
+    otp_secret?: string;
+    manager_id?: number;
+    team_id?: string;
+    is_active?: boolean;
 }
+
+passport.use(new LocalStrategy({
+    usernameField: 'email',
+    passwordField: 'password'
+}, async (email, password, done) => {
+    try {
+        const users = await sql<Customer[]>`SELECT * FROM customers WHERE email = ${email} LIMIT 1`;
+
+        if (users.length === 0) {
+            return done(null, false, { message: 'Incorrect email.' });
+        }
+
+        const user = users[0];
+
+        if (!user.password_hash) {
+            return done(null, false, { message: 'Please login with Google.' });
+        }
+
+        if (user.is_active === false) {
+            return done(null, false, { message: 'Account is deactivated.' });
+        }
+
+        const match = await bcrypt.compare(password, user.password_hash);
+
+        if (!match) {
+            return done(null, false, { message: 'Incorrect password.' });
+        }
+
+        return done(null, user);
+    } catch (err) {
+        return done(err);
+    }
+}));
 
 passport.use(new GoogleStrategy({
     clientID: process.env.CLIENT_ID || '',
@@ -38,8 +79,8 @@ passport.use(new GoogleStrategy({
             } else {
                 // Create new customer
                 const newCustomers = await sql<Customer[]>`
-                INSERT INTO customers (google_id, email, full_name, avatar_url, new_comer)
-                VALUES (${googleId}, ${email}, ${fullName}, ${avatarUrl}, ${true})
+                INSERT INTO customers (google_id, email, full_name, avatar_url, new_comer, role)
+                VALUES (${googleId}, ${email}, ${fullName}, ${avatarUrl}, ${true}, 'customer')
                 RETURNING *
             `;
                 return cb(null, newCustomers[0]);

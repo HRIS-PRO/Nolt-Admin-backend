@@ -14,6 +14,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Session Setup
+declare module 'express-session' {
+    interface SessionData {
+        otp_verified?: boolean;
+        passport?: {
+            user: number;
+        }
+    }
+}
+
 app.use(session({
     secret: process.env.SESSION_SECRET || 'secret',
     resave: false,
@@ -31,12 +40,16 @@ app.use(passport.session());
 // Routes
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customer.js';
+import staffRoutes from './routes/staff.js';
+import otpRoutes from './routes/auth_otp.js';
 
 app.get('/', (req, res) => {
     res.json({ message: "Welcome to Nolt Admin Backend API" });
 });
 
 app.use('/auth', authRoutes);
+app.use('/auth/otp', otpRoutes);
+app.use('/staff', staffRoutes);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
