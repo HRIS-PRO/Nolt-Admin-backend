@@ -6,8 +6,16 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './config/swagger.js';
 
+import cors from 'cors';
+
 const app = express();
 const port = process.env.PORT || 5000;
+
+// CORS - Allow all origins with credentials
+app.use(cors({
+    origin: true,
+    credentials: true
+}));
 
 // Middleware
 app.use(express.json());
