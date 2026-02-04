@@ -93,18 +93,22 @@ passport.use(new GoogleStrategy({
 ));
 
 passport.serializeUser((user: any, done) => {
+    console.log("DEBUG: serializeUser", user.id);
     done(null, user.id);
 });
 
 passport.deserializeUser(async (id: number, done) => {
+    console.log("DEBUG: deserializeUser", id);
     try {
         const users = await sql<Customer[]>`SELECT * FROM customers WHERE id = ${id}`;
         if (users.length > 0) {
             done(null, users[0]);
         } else {
+            console.log("DEBUG: deserializeUser - user not found");
             done(new Error("User not found"), null);
         }
     } catch (err) {
+        console.error("DEBUG: deserializeUser error", err);
         done(err, null);
     }
 });

@@ -47,7 +47,7 @@ const runMigration = async () => {
                 -- Loan Details
                 requested_loan_amount NUMERIC(15, 2),
                 loan_tenure_months INTEGER,
-                signature_url TEXT,
+                signatures TEXT[],
                 stage TEXT DEFAULT 'customer_experience', -- customer_experience, credit_stage_1, credit_stage_2, internal_control, finance
                 mda_tertiary TEXT,
                 ippis_number TEXT,
