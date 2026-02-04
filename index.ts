@@ -12,10 +12,17 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // CORS - Allow all origins with credentials
+// CORS - Allow specific origin for security
 app.use(cors({
-    origin: true,
+    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'], // Exact match required for credentials
     credentials: true
 }));
+
+// Global Request Logger
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - Session: ${req.sessionID} - User: ${req.user ? (req.user as any).id : 'Guest'}`);
+    next();
+});
 
 // Middleware
 app.use(express.json());
@@ -50,6 +57,7 @@ import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customer.js';
 import staffRoutes from './routes/staff.js';
 import otpRoutes from './routes/auth_otp.js';
+import uploadRoutes from './routes/upload.js';
 
 app.get('/', (req, res) => {
     res.json({ message: "Welcome to Nolt Admin Backend API" });
@@ -58,6 +66,7 @@ app.get('/', (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/auth/otp', otpRoutes);
 app.use('/staff', staffRoutes);
+app.use('/api/upload', uploadRoutes); // Register upload route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
