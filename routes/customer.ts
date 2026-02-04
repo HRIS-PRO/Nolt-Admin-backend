@@ -16,13 +16,27 @@ const router = Router();
  *           description: The user ID
  *         google_id:
  *           type: string
- *           description: The Google ID of the user
+ *           nullable: true
+ *           description: The Google ID of the user (Customers only)
  *         email:
  *           type: string
  *           description: The user's email
  *         full_name:
  *           type: string
  *           description: The user's full name
+ *         role:
+ *           type: string
+ *           description: The user's role (e.g., customer, superadmin, sales_manager)
+ *           default: customer
+ *         team_id:
+ *           type: string
+ *           description: ID of the team (Staff only)
+ *         manager_id:
+ *           type: integer
+ *           description: ID of the manager (Staff only)
+ *         is_active:
+ *           type: boolean
+ *           description: Whether the account is active
  *         avatar_url:
  *           type: string
  *           description: URL to the user's avatar

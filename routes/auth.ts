@@ -41,6 +41,42 @@ router.get('/google/callback',
 
 /**
  * @swagger
+ * /auth/login:
+ *   post:
+ *     summary: Login with Email/Password (Staff)
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *       401:
+ *         description: Invalid credentials
+ */
+router.post('/login', (req, res, next) => {
+    passport.authenticate('local', (err: any, user: any, info: any) => {
+        if (err) { return next(err); }
+        if (!user) { return res.status(401).json(info); }
+
+        req.logIn(user, (err) => {
+            if (err) { return next(err); }
+            return res.json({ message: "Login successful", user });
+        });
+    })(req, res, next);
+});
+
+/**
+ * @swagger
  * /auth/logout:
  *   get:
  *     summary: Logout user
