@@ -182,4 +182,45 @@ router.get('/loans/pending', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/staff/loans/{id}:
+ *   get:
+ *     summary: Get single loan details
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Loan details
+ *       404:
+ *         description: Loan not found
+ */
+router.get('/loans/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const loans = await sql`
+            SELECT 
+                l.*,
+                c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
+            WHERE l.id = ${id}
+        `;
+
+        if (loans.length === 0) {
+            return res.status(404).json({ message: "Loan not found" });
+        }
+
+        res.json(loans[0]);
+    } catch (error) {
+        console.error(`Error fetching loan ${req.params.id}:`, error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;
