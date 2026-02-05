@@ -1,5 +1,8 @@
 import { Router } from 'express';
 import passport from 'passport';
+import bcrypt from 'bcrypt';
+import sql from '../config/db.js';
+import { termiiService } from '../services/termiiService.js';
 
 const router = Router();
 
@@ -43,7 +46,7 @@ router.get('/google/callback',
  * @swagger
  * /auth/login:
  *   post:
- *     summary: Login with Email/Password (Staff)
+ *     summary: Login with Email/Password (Customer/Staff)
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -63,16 +66,187 @@ router.get('/google/callback',
  *       401:
  *         description: Invalid credentials
  */
-router.post('/login', (req, res, next) => {
-    passport.authenticate('local', (err: any, user: any, info: any) => {
+router.post('/login', async (req, res, next) => {
+    // Custom Local Strategy Authentication to handle OTP flow
+    passport.authenticate('local', async (err: any, user: any, info: any) => {
         if (err) { return next(err); }
         if (!user) { return res.status(401).json(info); }
 
+        try {
+            // Generate OTP
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+            // Save OTP to DB
+            await sql`
+                UPDATE customers 
+                SET email_otp = ${otp}, email_otp_expires_at = ${expiresAt}
+                WHERE id = ${user.id}
+            `;
+
+            // Send OTP via Email
+            await termiiService.sendEmailToken(user.email, otp);
+
+            return res.json({
+                message: "OTP sent to email",
+                email: user.email,
+                requireOtp: true
+            });
+
+        } catch (error) {
+            console.error("Login OTP Error:", error);
+            return res.status(500).json({ message: "Failed to send OTP" });
+        }
+    })(req, res, next);
+});
+
+/**
+ * @swagger
+ * /auth/register:
+ *   post:
+ *     summary: Register a new customer
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password, full_name]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               full_name:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: User registered successfully
+ *       400:
+ *         description: User already exists
+ */
+router.post('/register', async (req, res) => {
+    try {
+        const { email, password, full_name } = req.body;
+
+        if (!email || !password || !full_name) {
+            return res.status(400).json({ message: "Email, password, and full name are required" });
+        }
+
+        // Check if user exists
+        const existingUsers = await sql`SELECT id FROM customers WHERE email = ${email}`;
+        if (existingUsers.length > 0) {
+            return res.status(400).json({ message: "User already exists" });
+        }
+
+        // Hash password
+        const passwordHash = await bcrypt.hash(password, 10);
+
+        // Create user
+        const newUsers = await sql`
+            INSERT INTO customers (email, password_hash, full_name, role, new_comer, is_active)
+            VALUES (${email}, ${passwordHash}, ${full_name}, 'customer', true, true)
+            RETURNING *
+        `;
+
+        const user = newUsers[0];
+
+        // Generate OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+        // Save OTP (Update the just created user)
+        await sql`
+            UPDATE customers 
+            SET email_otp = ${otp}, email_otp_expires_at = ${expiresAt}
+            WHERE id = ${user.id}
+        `;
+
+        // Send OTP
+        await termiiService.sendEmailToken(email, otp);
+
+        res.status(201).json({
+            message: "Registration successful. OTP sent to email.",
+            email: user.email,
+            requireOtp: true
+        });
+
+    } catch (error) {
+        console.error("Registration Error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /auth/verify-email-otp:
+ *   post:
+ *     summary: Verify Email OTP and Login
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, otp]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               otp:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *       400:
+ *         description: Invalid or expired OTP
+ */
+router.post('/verify-email-otp', async (req, res, next) => {
+    try {
+        const { email, otp } = req.body;
+
+        if (!email || !otp) {
+            return res.status(400).json({ message: "Email and OTP are required" });
+        }
+
+        // Find user with matching OTP and valid expiry
+        const users = await sql`
+            SELECT * FROM customers 
+            WHERE email = ${email} 
+            AND email_otp = ${otp} 
+            AND email_otp_expires_at > NOW()
+        `;
+
+        if (users.length === 0) {
+            return res.status(400).json({ message: "Invalid or expired OTP" });
+        }
+
+        const user = users[0];
+
+        // Clear OTP
+        await sql`
+            UPDATE customers 
+            SET email_otp = NULL, email_otp_expires_at = NULL 
+            WHERE id = ${user.id}
+        `;
+
+        // Log user in using Passport
+        // Log user in using Passport
         req.logIn(user, (err) => {
             if (err) { return next(err); }
-            return res.json({ message: "Login successful", user });
+
+            // Explicitly save session to ensure cookie is set
+            req.session.save((err) => {
+                if (err) { return next(err); }
+                return res.json({ message: "Login successful", user });
+            });
         });
-    })(req, res, next);
+
+    } catch (error) {
+        console.error("OTP Verification Error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
 });
 
 /**
