@@ -21,7 +21,7 @@ export const uploadFile = async (file: Express.Multer.File, path: string) => {
     }
 
     const { data, error } = await supabase.storage
-        .from('Nolt storage')
+        .from('nolt-storsge')
         .upload(path, buffer, {
             contentType: contentType,
             upsert: false
@@ -33,7 +33,7 @@ export const uploadFile = async (file: Express.Multer.File, path: string) => {
 
     // Get Public URL
     const { data: publicData } = supabase.storage
-        .from('Nolt storage')
+        .from('nolt-storsge')
         .getPublicUrl(path);
 
     return {
