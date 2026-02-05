@@ -182,4 +182,84 @@ router.get('/loans/pending', async (req, res) => {
     }
 });
 
+
+
+/**
+ * @swagger
+ * /staff/users:
+ *   get:
+ *     summary: Get all users with their roles
+ *     tags: [Staff]
+ *     responses:
+ *       200:
+ *         description: List of all users
+ */
+router.get('/users', async (req, res) => {
+    try {
+        const users = await sql`
+            SELECT id, email, full_name, role, is_active, created_at, last_login 
+            FROM customers 
+            ORDER BY created_at DESC
+        `;
+        res.json(users);
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/users/{id}/role:
+ *   put:
+ *     summary: Update a user's role
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [role]
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [customer, staff, admin, super_admin]
+ *     responses:
+ *       200:
+ *         description: Role updated successfully
+ */
+router.put('/users/:id/role', isSuperAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!role) {
+        return res.status(400).json({ message: "Role is required." });
+    }
+
+    try {
+        const updatedUser = await sql`
+            UPDATE customers 
+            SET role = ${role}
+            WHERE id = ${id}
+            RETURNING id, email, full_name, role
+        `;
+
+        if (updatedUser.length === 0) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        res.json({ message: "Role updated successfully.", user: updatedUser[0] });
+    } catch (error) {
+        console.error("Error updating role:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;
