@@ -35,7 +35,8 @@ router.get('/google/callback',
     passport.authenticate('google', { failureRedirect: '/' }),
     (req, res) => {
         // Successful authentication, redirect to frontend
-        res.redirect('http://localhost:3000/dashboard?login=success');
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        res.redirect(`${frontendUrl}/dashboard?login=success`);
     }
 );
 
@@ -91,7 +92,8 @@ router.post('/login', (req, res, next) => {
 router.get('/logout', (req, res, next) => {
     req.logout((err) => {
         if (err) { return next(err); }
-        res.redirect('http://localhost:3000');
+        // res.redirect('http://localhost:3000'); // Triggers CORS error on fetch
+        res.status(200).json({ message: "Logged out successfully" });
     });
 });
 

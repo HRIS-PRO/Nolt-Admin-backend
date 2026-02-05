@@ -12,9 +12,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // CORS - Allow all origins with credentials
+// CORS - Allow all origins with credentials
 app.use(cors({
-    origin: true,
-    credentials: true
+    origin: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174', 'http://localhost:4173'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 }));
 
 // Middleware
