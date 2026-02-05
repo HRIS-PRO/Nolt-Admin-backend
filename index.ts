@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import session from 'express-session';
 import passport from 'passport';
@@ -58,6 +59,7 @@ import customerRoutes from './routes/customer.js';
 import staffRoutes from './routes/staff.js';
 import otpRoutes from './routes/auth_otp.js';
 import uploadRoutes from './routes/upload.js';
+import statsRoutes from './routes/stats.js';
 
 app.get('/', (req, res) => {
     res.json({ message: "Welcome to Nolt Admin Backend API" });
@@ -67,6 +69,7 @@ app.use('/auth', authRoutes);
 app.use('/auth/otp', otpRoutes);
 app.use('/staff', staffRoutes);
 app.use('/api/upload', uploadRoutes); // Register upload route
+app.use('/api/stats', statsRoutes); // Register stats route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
