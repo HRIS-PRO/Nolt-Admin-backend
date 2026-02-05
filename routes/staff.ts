@@ -7,7 +7,7 @@ const router = Router();
 
 // Middleware to check if user is a Superadmin
 const isSuperAdmin = (req: any, res: any, next: any) => {
-    if (req.isAuthenticated() && req.user.role === 'superadmin') {
+    if (req.isAuthenticated() && req.user.role === 'super_admin') {
         return next();
     }
     return res.status(403).json({ message: "Access denied. Superadmin only." });
@@ -151,6 +151,34 @@ router.post('/complete-setup', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Error setting password." });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/loans/pending:
+ *   get:
+ *     summary: Get pending loans queue with officer details
+ *     tags: [Staff]
+ *     responses:
+ *       200:
+ *         description: List of pending loans
+ */
+router.get('/loans/pending', async (req, res) => {
+    try {
+        const loans = await sql`
+            SELECT 
+                l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage,
+                c.full_name as officer_name, c.email as officer_email
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
+            WHERE l.status = 'pending'
+            ORDER BY l.created_at DESC
+        `;
+        res.json(loans);
+    } catch (error) {
+        console.error("Error fetching pending loans:", error);
+        res.status(500).json({ message: "Internal server error" });
     }
 });
 

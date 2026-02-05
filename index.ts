@@ -67,7 +67,7 @@ app.get('/', (req, res) => {
 
 app.use('/auth', authRoutes);
 app.use('/auth/otp', otpRoutes);
-app.use('/staff', staffRoutes);
+app.use('/api/staff', staffRoutes);
 app.use('/api/upload', uploadRoutes); // Register upload route
 app.use('/api/stats', statsRoutes); // Register stats route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
