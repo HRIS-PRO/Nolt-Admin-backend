@@ -70,6 +70,27 @@ app.use('/api/upload', uploadRoutes); // Register upload route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
+import { termiiService } from './services/termiiService.js';
+app.post('/test/termii', async (req, res) => {
+    try {
+        const { email, otp, message } = req.body;
+        if (!email) {
+            return res.status(400).json({ error: "Email is required" });
+        }
+        // Use 'otp' or 'message' field as the code
+        const code = otp || message; // Fallback to message for backward compatibility with user's previous curl
+
+        if (!code) {
+            return res.status(400).json({ error: "OTP code is required" });
+        }
+
+        const response = await termiiService.sendEmailToken(email, code);
+        res.json({ success: true, data: response });
+    } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.listen(port, () => {
     console.log(`Server is running at http://localhost:${port}`);
 });
