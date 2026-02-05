@@ -327,6 +327,35 @@ router.post('/loans', async (req, res) => {
                 mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount
             } = req.body;
 
+            // Auto-assign Sales Officer
+            let assignedOfficerId = null;
+
+            if (referral_code) {
+                // 1. Try to find officer by referral code
+                // Note: Referral code is unique in customers table
+                const [referrer] = await sql`SELECT id FROM customers WHERE referral_code = ${referral_code}`;
+                if (referrer) {
+                    assignedOfficerId = referrer.id;
+                }
+            }
+
+            if (!assignedOfficerId) {
+                // 2. Round Robin / Random assignment to a Sales Officer
+                // Fetch all users with role 'sales_officer'
+                const officers = await sql`SELECT id FROM customers WHERE role = 'sales_officer'`;
+
+                if (officers.length > 0) {
+                    // Simple Random Assignment for now (acts as basic load balancing)
+                    const randomIndex = Math.floor(Math.random() * officers.length);
+                    assignedOfficerId = officers[randomIndex].id;
+                } else {
+                    // Fallback: Assign to Super Admin or leave null?
+                    // Let's try to find a superadmin if no sales officer exists
+                    const [admin] = await sql`SELECT id FROM customers WHERE role = 'super_admin' OR role = 'superadmin' LIMIT 1`;
+                    if (admin) assignedOfficerId = admin.id;
+                }
+            }
+
             const [loan] = await sql`
                 INSERT INTO loans (
                     customer_id,
@@ -338,7 +367,8 @@ router.post('/loans', async (req, res) => {
                     govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
                     customer_references,
                     requested_loan_amount, loan_tenure_months, signatures,
-                    mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount
+                    mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount,
+                    sales_officer_id
                 ) VALUES (
                     ${customerId},
                     ${applying_for_others || false}, ${relationship_to_applicant || null}, ${applicant_full_name || null}, ${title || null},
@@ -349,7 +379,8 @@ router.post('/loans', async (req, res) => {
                     ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
                     ${references ? sql.json(references) : null},
                     ${requested_loan_amount || 0}, ${loan_tenure_months || 0}, ${signatures || null},
-                    ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${referral_code || null}, ${eligible_amount || 0}
+                    ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${referral_code || null}, ${eligible_amount || 0},
+                    ${assignedOfficerId}
                 )
                 RETURNING *
             `;
