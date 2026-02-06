@@ -38,8 +38,16 @@ router.get('/google/callback',
     passport.authenticate('google', { failureRedirect: '/' }),
     (req, res) => {
         // Successful authentication, redirect to frontend
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        res.redirect(`${frontendUrl}/dashboard?login=success`);
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+        // Explicitly save session before redirect to ensure cookie is set
+        req.session.save((err) => {
+            if (err) {
+                console.error("Session save error during callback:", err);
+                return res.redirect(`${frontendUrl}/login?error=session_save_failed`);
+            }
+            res.redirect(`${frontendUrl}/dashboard?login=success`);
+        });
     }
 );
 
