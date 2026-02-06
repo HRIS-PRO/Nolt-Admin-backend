@@ -77,6 +77,8 @@ router.post('/', upload.single('file'), async (req, res) => {
         // Upload to Supabase (with compression)
         const uploadResult = await uploadFile(file, path);
 
+
+
         // Record in Database
         const [doc] = await sql`
             INSERT INTO loan_documents (
@@ -90,6 +92,18 @@ router.post('/', upload.single('file'), async (req, res) => {
             )
             RETURNING *
         `;
+
+        // Log Activity if Staff
+        if (isStaff && finalLoanId) {
+            try {
+                await sql`
+                    INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+                    VALUES (${finalLoanId}, ${userId}, 'document_upload', ${`Uploaded document: ${document_type}`}, ${JSON.stringify({ file_name: file.originalname, file_url: uploadResult.url })})
+                `;
+            } catch (logError) {
+                console.error("Failed to log activity for upload:", logError);
+            }
+        }
 
         res.status(201).json({
             message: "File uploaded successfully",
