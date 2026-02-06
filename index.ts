@@ -42,7 +42,21 @@ declare module 'express-session' {
 // Enable Trust Proxy (Required for Railway/Vercel)
 app.set('trust proxy', 1);
 
+import connectPgSimple from 'connect-pg-simple';
+import pg from 'pg';
+
+const PgSession = connectPgSimple(session);
+const pool = new pg.Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
 app.use(session({
+    store: new PgSession({
+        pool: pool,
+        createTableIfMissing: true,
+        tableName: 'user_sessions'
+    }),
     secret: process.env.SESSION_SECRET || 'secret',
     resave: false,
     saveUninitialized: false, // Don't save empty sessions
@@ -50,7 +64,7 @@ app.use(session({
     cookie: {
         secure: true, // Required for SameSite: None. Vercel/Railway are HTTPS.
         sameSite: 'none', // Required for cross-origin (Vercel -> Railway)
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
 
