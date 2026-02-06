@@ -1,106 +1,108 @@
 # Nolt Admin Backend
 
-This is the backend for the Nolt Admin application, built with Express, TypeScript, and Passport.js for Google OAuth authentication.
+The backend service for the Nolt Finance Loan Management System. This Application handles loan processing, user management, staff invitations, and integrations with third-party services (Termii, Supabase).
 
-## Features
+## Tech Stack
 
-- **Google OAuth**: Secure login/signup via Google.
-- **Session Authentication**: Cookie-based sessions using `express-session`.
-- **Automatic User Creation**: Automatically creates a customer account if one doesn't exist upon login ("Find or Create").
-- **New Comer Tracking**: Tracks if a user is new via the `new_comer` flag.
-- **PostgreSQL Database**: Uses `postgres` (porsager) client for database interactions.
-- **API Documentation**: Interactive API docs via Swagger UI.
+- **Runtime**: Node.js
+- **Framework**: Express.js
+- **Language**: TypeScript
+- **Database**: PostgreSQL (via Supabase)
+- **ORM/Query Builder**: `postgres.js` (raw SQL queries with safe interpolation)
+- **Authentication**: Passport.js (Local & Google OAuth), Session-based
+- **Documentation**: Swagger UI
+- **Notifications**: Termii (Email/OTP)
 
 ## Prerequisites
 
-- Node.js (v18+ recommended)
-- PostgreSQL Database
+- Node.js (v18 or higher recommended)
+- npm (v9 or higher)
+- PostgreSQL database (or Supabase project)
 
-## Setup
+## Getting Started
 
-1.  **Install Dependencies**:
-    ```bash
-    npm install
-    ```
+### 1. Clone the Repository
 
-2.  **Environment Variables**:
-    Create a `.env` file in the root directory:
-    ```env
-    PORT=5000
-    DATABASE_URL=postgres://user:password@host:port/database
-    SESSION_SECRET=your_secret_key
-    CLIENT_ID=your_google_client_id
-    CLIENT_SECRET=your_google_client_secret
-    NODE_ENV=development
-    ```
+```bash
+git clone <repository-url>
+cd Nolt-Admin-backend
+```
 
-3.  **Database Migration**:
-    Run the migration scripts to set up the database tables:
-    ```bash
-    # Create customers table
-    node --env-file=.env --import tsx migrations/create_customers_table.ts
-    
-    # Add new_comer column (if updating existing DB)
-    node --env-file=.env --import tsx migrations/add_new_comer_column.ts
-    ```
+### 2. Install Dependencies
 
-## Running the Server
+```bash
+npm install
+```
 
-Start the development server:
+### 3. Environment Configuration
+
+Create a `.env` file in the root directory patterned after the example below.
+
+**Required Variables:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PORT` | Server port | `5000` |
+| `NODE_ENV` | Environment mode | `development` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
+| `SESSION_SECRET` | Secret key for session signing | `your_complex_secret` |
+| `CLIENT_ID` | Google OAuth Client ID | `...apps.googleusercontent.com` |
+| `CLIENT_SECRET` | Google OAuth Client Secret | `GOCSPX-...` |
+| `FRONTEND_URL` | URL of the frontend app | `http://localhost:5173` |
+
+**Supabase Integration:**
+
+| Variable | Description |
+|----------|-------------|
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_KEY` | Anon public key |
+| `SUPABASE_SERVICE_KEY` | Service role key (for admin tasks) |
+
+**Termii Configuration (Email/OTP):**
+
+| Variable | Description |
+|----------|-------------|
+| `TERMII_BASE_URL` | Termii API Base URL |
+| `TERMII_API_KEY` | Your Termii API Key |
+| `TERMII_EMAIL_CONFIG_ID` | Email Configuration ID from Termii Dashboard |
+
+### 4. Database Migration
+
+The project uses SQL migration files located in `migrations/`.
+
+```bash
+# Example: Run the loans table creation migration
+npx tsx migrations/create_loans_table.ts
+```
+
+### 5. Running the Application
+
+**Development Mode:**
+Runs with `node --watch` and `tsx` for auto-reloading.
+
 ```bash
 npm run dev
 ```
-The server will start at `http://localhost:5000`.
+
+**Production Build:**
+
+```bash
+npm run build
+npm start
+```
+
+The server will start on `http://localhost:5000` (or your specified PORT).
 
 ## API Documentation
+
 Interactive API documentation is available via Swagger UI.
-After starting the server, visit:
-**`http://localhost:5000/api-docs`**
 
-## API Endpoints
+1. Start the server.
+2. Visit **[http://localhost:5000/api-docs](http://localhost:5000/api-docs)** in your browser.
 
-### Authentication (`/auth`)
+## Key Features
 
--   **`GET /auth/google`**
-    -   **Description**: Initiates the Google OAuth flow.
-    -   **Action**: Redirects the user to Google's sign-in page.
-
--   **`GET /auth/google/callback`**
-    -   **Description**: The callback URL that Google redirects to after successful login.
-    -   **Action**: 
-        -   Verifies the user.
-        -   Creates a session cookie.
-        -   Redirects to the frontend dashboard: `http://localhost:3000/dashboard?login=success`.
-
--   **`GET /auth/logout`**
-    -   **Description**: Logs the user out.
-    -   **Action**: Destroys the session and redirects to the frontend home: `http://localhost:3000`.
-
-### Customers (`/api`)
-
--   **`GET /api/me`**
-    -   **Description**: Get current user's profile.
-    -   **Auth Required**: Yes (Session Cookie).
-    -   **Returns**: JSON object of the logged-in customer.
-    -   **Response**:
-        ```json
-        {
-          "id": 1,
-          "google_id": "12345...",
-          "email": "user@example.com",
-          "full_name": "John Doe",
-          "avatar_url": "...",
-          "new_comer": true
-        }
-        ```
-
-## Project Structure
-
--   **`config/`**: Configuration files (Passport strategy, Database connection).
--   **`routes/`**: API Route handlers (`auth.ts`, `customer.ts`).
--   **`migrations/`**: Database migration scripts.
--   **`index.ts`**: Main application entry point.
-
-## License
-
-ISC
+- **Staff Management**: Invite staff, revoke access, assign roles (Super Admin, Sales Officer, etc.).
+- **Loan Processing**: State machine implementation for loan stages (Credit Check -> Audit -> Finance).
+- **Document Management**: Upload and retrieval of loan documents.
+- **Role-Based Access Control (RBAC)**: Middleware ensures endpoints are restricted to appropriate roles.
