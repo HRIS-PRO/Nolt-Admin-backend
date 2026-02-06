@@ -15,7 +15,7 @@ const port = process.env.PORT || 5000;
 // CORS - Allow all origins with credentials
 // CORS - Allow specific origin for security
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://127.0.0.1:3000'], // Exact match required for credentials
+    origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'https://nolt-finance.vercel.app'], // Exact match required for credentials
     credentials: true
 }));
 
