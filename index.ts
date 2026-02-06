@@ -39,12 +39,17 @@ declare module 'express-session' {
     }
 }
 
+// Enable Trust Proxy (Required for Railway/Vercel)
+app.set('trust proxy', 1);
+
 app.use(session({
     secret: process.env.SESSION_SECRET || 'secret',
     resave: false,
-    saveUninitialized: false,
+    saveUninitialized: false, // Don't save empty sessions
+    proxy: true, // Required for secure cookies behind proxy
     cookie: {
-        secure: false, // process.env.NODE_ENV === 'production', // Set to true in production (HTTPS)
+        secure: true, // Required for SameSite: None. Vercel/Railway are HTTPS.
+        sameSite: 'none', // Required for cross-origin (Vercel -> Railway)
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
 }));
