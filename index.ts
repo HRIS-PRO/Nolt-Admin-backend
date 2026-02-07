@@ -65,8 +65,8 @@ app.use(session({
     saveUninitialized: false, // Don't save empty sessions
     proxy: true, // Required for secure cookies behind proxy
     cookie: {
-        secure: isProduction, // true in prod (Requires HTTPS), false in dev
-        sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
+        secure: true, // true in prod (Requires HTTPS), false in dev
+        sameSite: 'none', // 'none' for cross-site (prod), 'lax' for local
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
