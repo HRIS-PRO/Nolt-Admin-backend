@@ -223,6 +223,9 @@ router.post('/verify-email-otp', async (req, res, next) => {
             return res.status(400).json({ message: "Email and OTP are required" });
         }
 
+        // Debug Log
+        console.log(`Verifying OTP for ${email}. Input OTP: ${otp}`);
+
         // Find user with matching OTP and valid expiry
         const users = await sql`
             SELECT * FROM customers 
@@ -232,6 +235,12 @@ router.post('/verify-email-otp', async (req, res, next) => {
         `;
 
         if (users.length === 0) {
+            console.log(`OTP Verification Failed for ${email}. No matching user found (or expired).`);
+            // Check why it failed (for deeper debugging)
+            const userCheck = await sql`SELECT email_otp, email_otp_expires_at FROM customers WHERE email = ${email}`;
+            if (userCheck.length > 0) {
+                console.log(`DB State for ${email}:`, userCheck[0]);
+            }
             return res.status(400).json({ message: "Invalid or expired OTP" });
         }
 

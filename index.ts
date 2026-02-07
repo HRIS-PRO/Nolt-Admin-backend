@@ -62,8 +62,8 @@ app.use(session({
     saveUninitialized: false, // Don't save empty sessions
     proxy: true, // Required for secure cookies behind proxy
     cookie: {
-        secure: true, // Required for SameSite: None. Vercel/Railway are HTTPS.
-        sameSite: 'none', // Required for cross-origin (Vercel -> Railway)
+        secure: process.env.NODE_ENV === 'production', // true in prod (Requires HTTPS), false in dev
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));

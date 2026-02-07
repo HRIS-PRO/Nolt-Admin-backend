@@ -97,7 +97,11 @@ router.post('/verify', isAuthenticated, async (req, res) => {
     }
 
     try {
+        // Debug Log
+        console.log(`Verifying App OTP for user ${user.id}. Token: ${token}`);
+
         const isValid = authenticator.check(token, user.otp_secret);
+        console.log(`App OTP Valid: ${isValid}`);
 
         if (isValid) {
             if (req.session) {
