@@ -15,8 +15,24 @@ const port = process.env.PORT || 5000;
 // CORS - Allow all origins with credentials
 // CORS - Allow specific origin for security
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'https://nolt-finance.vercel.app'], // Exact match required for credentials
-    credentials: true
+    origin: function (origin, callback) {
+        console.log("Incoming Origin:", origin);
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+
+        // Allowed origins
+        const allowedOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'];
+
+        if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.vercel.app')) {
+            callback(null, true);
+        } else {
+            console.log("Blocked by CORS:", origin);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
 }));
 
 // Global Request Logger
@@ -52,7 +68,17 @@ const pool = new pg.Pool({
 });
 
 // Determine if we are in production
-const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+const isProduction = process.env.NODE_ENV === 'production' ||
+    !!process.env.RAILWAY_ENVIRONMENT ||
+    !!process.env.RAILWAY_STATIC_URL ||
+    !!process.env.RAILWAY_PUBLIC_DOMAIN;
+
+console.log("----------------------------------------------------------------");
+console.log(`Environment Check:`);
+console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
+console.log(`RAILWAY_ENVIRONMENT: ${process.env.RAILWAY_ENVIRONMENT}`);
+console.log(`isProduction (Calculated): ${isProduction}`);
+console.log("----------------------------------------------------------------");
 
 app.use(session({
     store: new PgSession({
@@ -65,8 +91,8 @@ app.use(session({
     saveUninitialized: false, // Don't save empty sessions
     proxy: true, // Required for secure cookies behind proxy
     cookie: {
-        secure: true, // true in prod (Requires HTTPS), false in dev
-        sameSite: 'none', // 'none' for cross-site (prod), 'lax' for local
+        secure: isProduction, // true in prod (Requires HTTPS), false in dev
+        sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
