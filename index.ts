@@ -36,10 +36,7 @@ app.use(cors({
 }));
 
 // Global Request Logger
-app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - Session: ${req.sessionID} - User: ${req.user ? (req.user as any).id : 'Guest'}`);
-    next();
-});
+
 
 // Middleware
 app.use(express.json());
@@ -101,6 +98,20 @@ app.use(session({
 // Passport Middleware
 app.use(passport.initialize());
 app.use(passport.session());
+
+// Global Request Logger (Moved after session/passport to log actual user state)
+app.use((req, res, next) => {
+    const user = req.user as any;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log(`\tSession ID: ${req.sessionID}`);
+    console.log(`\tUser: ${user ? `${user.id} (${user.email})` : 'Guest'}`);
+    console.log(`\tCookie: ${req.headers.cookie ? 'Present' : 'Missing'}`);
+    if (req.headers.cookie) {
+        // Only log the connect.sid part for security/brevity in prod logs if needed, but full cookie is useful for debug
+        console.log(`\tFull Cookie: ${req.headers.cookie}`);
+    }
+    next();
+});
 
 // Routes
 import authRoutes from './routes/auth.js';

@@ -98,17 +98,20 @@ passport.serializeUser((user: any, done) => {
 });
 
 passport.deserializeUser(async (id: number, done) => {
-    console.log("DEBUG: deserializeUser", id);
+    console.log(`DEBUG: deserializeUser called for ID: ${id}`);
     try {
         const users = await sql<Customer[]>`SELECT * FROM customers WHERE id = ${id}`;
         if (users.length > 0) {
+            console.log(`DEBUG: deserializeUser success for ID: ${id}`);
             done(null, users[0]);
         } else {
-            console.log("DEBUG: deserializeUser - user not found");
-            done(new Error("User not found"), null);
+            console.log(`DEBUG: deserializeUser - user not found for ID: ${id}`);
+            // If user is removed from DB but session exists, we should probably invalid the session, 
+            // but for now just return null/false user
+            done(null, false);
         }
     } catch (err) {
-        console.error("DEBUG: deserializeUser error", err);
+        console.error(`DEBUG: deserializeUser/SQL error for ID: ${id}`, err);
         done(err, null);
     }
 });
