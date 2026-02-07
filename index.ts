@@ -84,6 +84,7 @@ app.use(session({
         createTableIfMissing: true,
         tableName: 'user_sessions'
     }),
+    name: 'nolt_admin_sid', // Rename to avoid zombie cookies
     secret: process.env.SESSION_SECRET || 'secret',
     resave: false,
     saveUninitialized: false, // Don't save empty sessions
