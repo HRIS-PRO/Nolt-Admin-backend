@@ -77,6 +77,7 @@ console.log("----------------------------------------------------------------");
 console.log(`Environment Check:`);
 console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 console.log(`RAILWAY_ENVIRONMENT: ${process.env.RAILWAY_ENVIRONMENT}`);
+console.log(`RAILWAY_PUBLIC_DOMAIN: ${process.env.RAILWAY_PUBLIC_DOMAIN}`);
 console.log(`isProduction (Calculated): ${isProduction}`);
 console.log("----------------------------------------------------------------");
 
