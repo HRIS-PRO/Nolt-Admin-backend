@@ -111,6 +111,9 @@ app.use((req, res, next) => {
         // Only log the connect.sid part for security/brevity in prod logs if needed, but full cookie is useful for debug
         console.log(`\tFull Cookie: ${req.headers.cookie}`);
     }
+    console.log(`\tProtocol: ${req.protocol}`);
+    console.log(`\tSecure: ${req.secure}`);
+    console.log(`\tX-Forwarded-Proto: ${req.headers['x-forwarded-proto']}`);
     next();
 });
 
