@@ -91,7 +91,7 @@ app.use(session({
     proxy: true, // Required for secure cookies behind proxy
     cookie: {
         secure: isProduction, // true in prod (Requires HTTPS), false in dev
-        sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
+        sameSite: 'lax', // Now that we use Vercel Rewrites, it's same-origin!
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
