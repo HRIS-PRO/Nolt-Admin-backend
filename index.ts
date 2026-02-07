@@ -94,8 +94,7 @@ app.use(session({
     cookie: {
         secure: isProduction, // true in prod (Requires HTTPS), false in dev
         sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-        domain: isProduction ? '.railway.app' : undefined // Attempt to set domain wildcard if needed, but usually none is enough for 3rd party
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
 
