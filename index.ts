@@ -51,6 +51,9 @@ const pool = new pg.Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+// Determine if we are in production
+const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+
 app.use(session({
     store: new PgSession({
         pool: pool,
@@ -62,8 +65,8 @@ app.use(session({
     saveUninitialized: false, // Don't save empty sessions
     proxy: true, // Required for secure cookies behind proxy
     cookie: {
-        secure: process.env.NODE_ENV === 'production', // true in prod (Requires HTTPS), false in dev
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
+        secure: isProduction, // true in prod (Requires HTTPS), false in dev
+        sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-site (prod), 'lax' for local
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
@@ -114,5 +117,9 @@ app.post('/test/email', async (req, res) => {
 });
 
 app.listen(port, () => {
+    // Re-calculate simply for logging or move variable scope up if needed, but here simple calc is fine
+    const isProdForLog = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
     console.log(`Server is running at http://localhost:${port}`);
+    console.log(`Environment: ${process.env.NODE_ENV}, Railway: ${!!process.env.RAILWAY_ENVIRONMENT}`);
+    console.log(`Cookie Settings: Secure=${isProdForLog}, SameSite=${isProdForLog ? 'none' : 'lax'}`);
 });
