@@ -50,6 +50,8 @@ router.get('/google/callback',
                 console.error("Session save error during callback:", err);
                 return res.redirect(`${frontendUrl}/login?error=session_save_failed`);
             }
+            console.log(`[Google Callback] Session Saved. ID: ${req.sessionID}. Redirecting to ${frontendUrl}/dashboard`);
+            console.log('[Google Callback] Cookie Settings:', req.session.cookie);
             res.redirect(`${frontendUrl}/dashboard?login=success`);
         });
     }
