@@ -92,8 +92,8 @@ app.use('/api/stats', statsRoutes); // Register stats route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
-import { termiiService } from './services/termiiService.js';
-app.post('/test/termii', async (req, res) => {
+import { resendService } from './services/resendService.js';
+app.post('/test/email', async (req, res) => {
     try {
         const { email, otp, message } = req.body;
         if (!email) {
@@ -106,7 +106,7 @@ app.post('/test/termii', async (req, res) => {
             return res.status(400).json({ error: "OTP code is required" });
         }
 
-        const response = await termiiService.sendEmailToken(email, code);
+        const response = await resendService.sendEmailToken(email, code);
         res.json({ success: true, data: response });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
