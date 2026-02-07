@@ -261,6 +261,8 @@ router.post('/verify-email-otp', async (req, res, next) => {
             // Explicitly save session to ensure cookie is set
             req.session.save((err) => {
                 if (err) { return next(err); }
+                console.log(`OTP Login Successful for ${email}. Session ID: ${req.sessionID}`);
+                console.log('Session Cookie:', req.session.cookie);
                 return res.json({ message: "Login successful", user });
             });
         });
