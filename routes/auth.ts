@@ -2,7 +2,7 @@ import { Router } from 'express';
 import passport from 'passport';
 import bcrypt from 'bcrypt';
 import sql from '../config/db.js';
-import { termiiService } from '../services/termiiService.js';
+import { emailService } from '../services/emailService.js';
 
 const router = Router();
 
@@ -94,7 +94,7 @@ router.post('/login', async (req, res, next) => {
             `;
 
             // Send OTP via Email
-            await termiiService.sendEmailToken(user.email, otp);
+            await emailService.sendEmailToken(user.email, otp);
 
             return res.json({
                 message: "OTP sent to email",
@@ -173,7 +173,7 @@ router.post('/register', async (req, res) => {
         `;
 
         // Send OTP
-        await termiiService.sendEmailToken(email, otp);
+        await emailService.sendEmailToken(email, otp);
 
         res.status(201).json({
             message: "Registration successful. OTP sent to email.",

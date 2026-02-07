@@ -62,8 +62,8 @@ app.use(session({
     saveUninitialized: false, // Don't save empty sessions
     proxy: true, // Required for secure cookies behind proxy
     cookie: {
-        secure: true, // Required for SameSite: None. Vercel/Railway are HTTPS.
-        sameSite: 'none', // Required for cross-origin (Vercel -> Railway)
+        secure: process.env.NODE_ENV === 'production', // true in production, false in dev
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-site prod, 'lax' for local
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     }
 }));
@@ -92,26 +92,7 @@ app.use('/api/stats', statsRoutes); // Register stats route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 
-import { termiiService } from './services/termiiService.js';
-app.post('/test/termii', async (req, res) => {
-    try {
-        const { email, otp, message } = req.body;
-        if (!email) {
-            return res.status(400).json({ error: "Email is required" });
-        }
-        // Use 'otp' or 'message' field as the code
-        const code = otp || message; // Fallback to message for backward compatibility with user's previous curl
 
-        if (!code) {
-            return res.status(400).json({ error: "OTP code is required" });
-        }
-
-        const response = await termiiService.sendEmailToken(email, code);
-        res.json({ success: true, data: response });
-    } catch (error: any) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
 
 app.listen(port, () => {
     console.log(`Server is running at http://localhost:${port}`);

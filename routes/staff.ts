@@ -2,7 +2,7 @@ import { Router } from 'express';
 import sql from '../config/db.js';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
-import { termiiService } from '../services/termiiService.js';
+import { emailService } from '../services/emailService.js';
 
 const router = Router();
 
@@ -71,9 +71,9 @@ router.post('/invite', isSuperAdmin, async (req, res) => {
             RETURNING id, email, role
         `;
 
-        // Send Email via Termii
+        // Send Email via Email Service (Resend)
         try {
-            await termiiService.sendEmailToken(email, tempPassword);
+            await emailService.sendEmailToken(email, tempPassword);
         } catch (emailError) {
             console.error("Failed to send credential email:", emailError);
             // We don't rollback user creation, but we warn the admin

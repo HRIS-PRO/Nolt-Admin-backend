@@ -40,30 +40,33 @@ Create a `.env` file in the root directory patterned after the example below.
 
 **Required Variables:**
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `PORT` | Server port | `5000` |
-| `NODE_ENV` | Environment mode | `development` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
-| `SESSION_SECRET` | Secret key for session signing | `your_complex_secret` |
-| `CLIENT_ID` | Google OAuth Client ID | `...apps.googleusercontent.com` |
-| `CLIENT_SECRET` | Google OAuth Client Secret | `GOCSPX-...` |
-| `FRONTEND_URL` | URL of the frontend app | `http://localhost:5173` |
+| Variable         | Description                    | Example                               |
+| ---------------- | ------------------------------ | ------------------------------------- |
+| `PORT`           | Server port                    | `5000`                                |
+| `NODE_ENV`       | Environment mode               | `development`                         |
+| `DATABASE_URL`   | PostgreSQL connection string   | `postgresql://user:pass@host:5432/db` |
+| `SESSION_SECRET` | Secret key for session signing | `your_complex_secret`                 |
+| `CLIENT_ID`      | Google OAuth Client ID         | `...apps.googleusercontent.com`       |
+| `CLIENT_SECRET`  | Google OAuth Client Secret     | `GOCSPX-...`                          |
+| `FRONTEND_URL`   | URL of the frontend app        | `http://localhost:5173`               |
 
 **Supabase Integration:**
 
-| Variable | Description |
-|----------|-------------|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_KEY` | Anon public key |
+| Variable               | Description                        |
+| ---------------------- | ---------------------------------- |
+| `SUPABASE_URL`         | Your Supabase project URL          |
+| `SUPABASE_KEY`         | Anon public key                    |
 | `SUPABASE_SERVICE_KEY` | Service role key (for admin tasks) |
+
+- **Resend**: Used for transactional emails (OTP, Invites).
+  - **Testing**: While in Sandbox mode, emails can **ONLY** be sent to `tech@noltfinance.com`. Verify your domain on Resend to send to others.
 
 **Termii Configuration (Email/OTP):**
 
-| Variable | Description |
-|----------|-------------|
-| `TERMII_BASE_URL` | Termii API Base URL |
-| `TERMII_API_KEY` | Your Termii API Key |
+| Variable                 | Description                                  |
+| ------------------------ | -------------------------------------------- |
+| `TERMII_BASE_URL`        | Termii API Base URL                          |
+| `TERMII_API_KEY`         | Your Termii API Key                          |
 | `TERMII_EMAIL_CONFIG_ID` | Email Configuration ID from Termii Dashboard |
 
 ### 4. Database Migration
