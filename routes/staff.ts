@@ -650,4 +650,73 @@ router.post('/loans/:id/action', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /staff/change-password:
+ *   post:
+ *     summary: Change staff password
+ *     tags: [Staff]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [oldPassword, newPassword]
+ *             properties:
+ *               oldPassword:
+ *                 type: string
+ *               newPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password updated successfully
+ *       400:
+ *         description: Invalid password or request
+ */
+router.post('/change-password', async (req, res) => {
+    // @ts-ignore
+    const user = req.user as any;
+    const { oldPassword, newPassword } = req.body;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+    if (!oldPassword || !newPassword) {
+        return res.status(400).json({ message: "Both old and new passwords are required." });
+    }
+    if (newPassword.length < 6) {
+        return res.status(400).json({ message: "New password must be at least 6 characters long." });
+    }
+
+    try {
+        // Fetch current password hash
+        const [currentUser] = await sql`SELECT password_hash FROM customers WHERE id = ${user.id}`;
+
+        if (!currentUser || !currentUser.password_hash) {
+            return res.status(400).json({ message: "User not found or no password set." });
+        }
+
+        // Verify old password
+        const isMatch = await bcrypt.compare(oldPassword, currentUser.password_hash);
+        if (!isMatch) {
+            return res.status(400).json({ message: "Incorrect current password." });
+        }
+
+        // Hash new password
+        const newHashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update password
+        await sql`
+            UPDATE customers 
+            SET password_hash = ${newHashedPassword}
+            WHERE id = ${user.id}
+        `;
+
+        res.json({ message: "Password updated successfully." });
+
+    } catch (error) {
+        console.error("Error changing password:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;
