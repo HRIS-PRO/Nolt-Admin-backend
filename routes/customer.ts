@@ -63,10 +63,27 @@ const router = Router();
  *       401:
  *         description: Unauthorized
  */
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
     if (req.isAuthenticated()) {
-        console.log("DEBUG: /api/me called. req.user:", req.user); // Added debug log
-        res.json(req.user);
+        try {
+            // @ts-ignore
+            const userId = req.user.id;
+
+            // Fetch marketing data to see if referral code was used
+            const [marketingData] = await sql`
+                SELECT referral_code FROM marketing WHERE customer_id = ${userId}
+            `;
+
+            // Merge with user object
+            // @ts-ignore
+            const userResponse = { ...req.user, referral_code_used: marketingData?.referral_code || null };
+
+            console.log("DEBUG: /api/me called. Response:", userResponse);
+            res.json(userResponse);
+        } catch (error) {
+            console.error("Error in /api/me:", error);
+            res.json(req.user); // Fallback to basic user info
+        }
     } else {
         res.status(401).json({ message: "Unauthorized" });
     }

@@ -244,7 +244,7 @@ router.get('/loans', async (req, res) => {
     try {
         const loans = await sql`
             SELECT 
-                l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage,
+                l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
                 c.full_name as officer_name, c.email as officer_email
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -271,7 +271,7 @@ router.get('/loans/pending', async (req, res) => {
     try {
         const loans = await sql`
             SELECT 
-                l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage,
+                l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
                 c.full_name as officer_name, c.email as officer_email
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -392,7 +392,17 @@ router.get('/loans/:id', async (req, res) => {
     try {
         const loans = await sql`
             SELECT 
-                l.*,
+                l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
+                l.gender, l.date_of_birth, l.marital_status, l.religion, l.mothers_maiden_name, l.is_politically_exposed, l.title,
+                l.mobile_number, l.personal_email, l.primary_home_address, l.residential_status, l.state_of_residence, l.state_of_origin,
+                l.average_monthly_income, l.number_of_dependents, l.has_active_loans,
+                l.mda_tertiary, l.ippis_number,
+                l.govt_id_url, l.statement_of_account_url, l.proof_of_residence_url, l.selfie_verification_url,
+                l.customer_references, l.signatures, l.updated_at, l.eligible_amount, l.sales_officer_id,
+                -- Mask Sensitive Data by Default
+                '*******' as bvn,
+                '*******' as nin,
+                
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -440,6 +450,71 @@ router.get('/loans/:id/activities', async (req, res) => {
         res.json(activities);
     } catch (error) {
         console.error("Error fetching activities:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/loans/{id}/reveal:
+ *   post:
+ *     summary: Reveal sensitive data for a loan and log the action
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [field]
+ *             properties:
+ *               field:
+ *                 type: string
+ *                 enum: [bvn, nin]
+ *     responses:
+ *       200:
+ *         description: Revealed data
+ *       403:
+ *         description: Unauthorized
+ */
+router.post('/loans/:id/reveal', async (req, res) => {
+    const { id } = req.params;
+    const { field } = req.body;
+    // @ts-ignore
+    const user = req.user as any;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+    if (!['bvn', 'nin'].includes(field)) {
+        return res.status(400).json({ message: "Invalid field requested." });
+    }
+
+    try {
+        // Fetch specific field
+        // Note: We use dynamic column selection carefully here since field is validated against allowlist
+        const [loan] = await sql`SELECT ${sql(field)} FROM loans WHERE id = ${id}`;
+
+        if (!loan) return res.status(404).json({ message: "Loan not found" });
+
+        // Log Activity
+        try {
+            await sql`
+                INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+                VALUES (${id}, ${user.id}, 'view_sensitive_data', ${`Viewed ${field.toUpperCase()}`}, ${JSON.stringify({ field })})
+            `;
+        } catch (logError) {
+            console.error("Failed to log view activity:", logError);
+        }
+
+        res.json({ value: loan[field] });
+
+    } catch (error) {
+        console.error(`Error revealing ${field}:`, error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
