@@ -325,7 +325,9 @@ router.post('/loans', async (req, res) => {
             const customerId = req.user.id;
             const {
                 // Identity
-                applying_for_others, relationship_to_applicant, applicant_full_name, title,
+                applying_for_others, relationship_to_applicant, title,
+                // Name parts
+                surname, first_name, middle_name,
                 is_politically_exposed, gender, date_of_birth, religion, marital_status,
                 mothers_maiden_name, mobile_number, personal_email, bvn, nin,
 
@@ -335,6 +337,7 @@ router.post('/loans', async (req, res) => {
 
                 // Documents
                 govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
+                work_id_url, payslip_url,
 
                 // References
                 references, // Should be an array of objects
@@ -343,6 +346,19 @@ router.post('/loans', async (req, res) => {
                 requested_loan_amount, loan_tenure_months, signatures,
                 mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount
             } = req.body;
+
+            // Validate Mandatory Fields
+            if (!surname || !first_name || !mobile_number || !requested_loan_amount) {
+                return res.status(400).json({ message: "Surname, First Name, Mobile, and Amount are required." });
+            }
+
+            // Validate Mandatory Documents
+            if (!govt_id_url || !work_id_url || !payslip_url) {
+                return res.status(400).json({ message: "Govt ID, Work ID, and Payslip are mandatory." });
+            }
+
+            // Construct Full Name for Backward Compatibility
+            const applicant_full_name = `${surname} ${first_name} ${middle_name || ''}`.trim();
 
             // Auto-assign Sales Officer
             let assignedOfficerId = null;
@@ -376,24 +392,30 @@ router.post('/loans', async (req, res) => {
             const [loan] = await sql`
                 INSERT INTO loans (
                     customer_id,
-                    applying_for_others, relationship_to_applicant, applicant_full_name, title,
+                    applying_for_others, relationship_to_applicant,
+                    surname, first_name, middle_name, applicant_full_name,
+                    title,
                     is_politically_exposed, gender, date_of_birth, religion, marital_status,
                     mothers_maiden_name, mobile_number, personal_email, bvn, nin,
                     state_of_origin, state_of_residence, primary_home_address, residential_status,
                     number_of_dependents, has_active_loans, average_monthly_income,
                     govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
+                    work_id_url, payslip_url,
                     customer_references,
                     requested_loan_amount, loan_tenure_months, signatures,
                     mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount,
                     sales_officer_id
                 ) VALUES (
                     ${customerId},
-                    ${applying_for_others || false}, ${relationship_to_applicant || null}, ${applicant_full_name || null}, ${title || null},
+                    ${applying_for_others || false}, ${relationship_to_applicant || null},
+                    ${surname}, ${first_name}, ${middle_name || null}, ${applicant_full_name},
+                    ${title || null},
                     ${is_politically_exposed || false}, ${gender || null}, ${date_of_birth || null}, ${religion || null}, ${marital_status || null},
                     ${mothers_maiden_name || null}, ${mobile_number || null}, ${personal_email || null}, ${bvn || null}, ${nin || null},
                     ${state_of_origin || null}, ${state_of_residence || null}, ${primary_home_address || null}, ${residential_status || null},
                     ${number_of_dependents || 0}, ${has_active_loans || false}, ${average_monthly_income || 0},
                     ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
+                    ${work_id_url || null}, ${payslip_url || null},
                     ${references ? sql.json(references) : null},
                     ${requested_loan_amount || 0}, ${loan_tenure_months || 0}, ${signatures || null},
                     ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${referral_code || null}, ${eligible_amount || 0},

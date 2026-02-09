@@ -794,4 +794,137 @@ router.post('/change-password', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /staff/loans/application:
+ *   post:
+ *     summary: Create a loan application on behalf of a customer
+ *     tags: [Staff]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [applicant_full_name, mobile_number, requested_loan_amount]
+ *     responses:
+ *       201:
+ *         description: Loan application created successfully
+ *       400:
+ *         description: Missing required fields
+ */
+router.post('/loans/application', async (req, res) => {
+    // @ts-ignore
+    const officer = req.user as any;
+    if (!officer) return res.status(401).json({ message: "Unauthorized" });
+
+    const {
+        // Identity
+        title, surname, first_name, middle_name,
+        gender, date_of_birth, religion, marital_status,
+        mothers_maiden_name, mobile_number, personal_email, bvn, nin,
+
+        // Address
+        state_of_origin, state_of_residence, residential_status, primary_home_address,
+
+        // Employment
+        mda_tertiary, ippis_number, average_monthly_income,
+
+        // Loan
+        requested_loan_amount, loan_tenure_months,
+
+        // Documents
+        work_id_url, payslip_url,
+        // (Optional legacy fields if sent)
+        govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
+
+        // References
+        references
+    } = req.body;
+
+    // Validate Mandatory Fields
+    if (!surname || !first_name || !mobile_number || !requested_loan_amount) {
+        return res.status(400).json({ message: "Surname, First Name, Mobile, and Amount are required." });
+    }
+
+    // Validate Mandatory Documents
+    if (!govt_id_url || !work_id_url || !payslip_url) {
+        return res.status(400).json({ message: "Govt ID, Work ID, and Payslip are mandatory." });
+    }
+
+    try {
+        // Construct Full Name for Backward Compatibility
+        const applicant_full_name = `${surname} ${first_name} ${middle_name || ''}`.trim();
+
+        // 1. Customer Resolution
+        let customerId;
+        const emailToUse = personal_email || `${mobile_number}@placeholder.nolt`;
+
+        // Check if customer exists by email
+        const existingCustomer = await sql`SELECT id FROM customers WHERE email = ${emailToUse} LIMIT 1`;
+
+        if (existingCustomer.length > 0) {
+            customerId = existingCustomer[0].id;
+        } else {
+            // Create new customer
+            const tempPassword = Math.random().toString(36).slice(-8);
+            const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+            const newCustomer = await sql`
+                INSERT INTO customers (
+                    email, full_name, role, is_active, new_comer, password_hash, google_id
+                ) VALUES (
+                    ${emailToUse}, ${applicant_full_name}, 'customer', true, true, ${hashedPassword}, null
+                )
+                RETURNING id
+            `;
+            customerId = newCustomer[0].id;
+        }
+
+        // 2. Create Loan
+        const [loan] = await sql`
+            INSERT INTO loans (
+                customer_id, sales_officer_id,
+                surname, first_name, middle_name, applicant_full_name,
+                mobile_number, personal_email,
+                title, gender, date_of_birth, religion, marital_status, mothers_maiden_name,
+                bvn, nin,
+                state_of_origin, state_of_residence, residential_status, primary_home_address,
+                mda_tertiary, ippis_number, average_monthly_income,
+                requested_loan_amount, loan_tenure_months,
+                govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
+                work_id_url, payslip_url,
+                customer_references,
+                status, stage
+            ) VALUES (
+                ${customerId}, ${officer.id},
+                ${surname}, ${first_name}, ${middle_name || null}, ${applicant_full_name},
+                ${mobile_number}, ${personal_email || null},
+                ${title || null}, ${gender || null}, ${date_of_birth || null}, ${religion || null}, ${marital_status || null}, ${mothers_maiden_name || null},
+                ${bvn || null}, ${nin || null},
+                ${state_of_origin || null}, ${state_of_residence || null}, ${residential_status || null}, ${primary_home_address || null},
+                ${mda_tertiary || null}, ${ippis_number || null}, ${average_monthly_income || 0},
+                ${requested_loan_amount}, ${loan_tenure_months || 6},
+                ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
+                ${work_id_url || null}, ${payslip_url || null},
+                ${references ? sql.json(references) : null},
+                'pending', 'credit_check_1'
+            )
+            RETURNING id
+        `;
+
+        // 3. Log Activity
+        await sql`
+            INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+            VALUES (${loan.id}, ${officer.id}, 'create_application', 'Sales Officer created application', ${JSON.stringify({ customerId })})
+        `;
+
+        res.status(201).json({ message: "Loan application created successfully", loanId: loan.id });
+
+    } catch (error) {
+        console.error("Error creating loan application:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;

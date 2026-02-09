@@ -136,6 +136,8 @@ app.use('/api/upload', uploadRoutes); // Register upload route
 app.use('/api/stats', statsRoutes); // Register stats route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
+import investmentRoutes from './routes/investment.js';
+app.use('/api/investments', investmentRoutes);
 
 import { resendService } from './services/resendService.js';
 app.post('/test/email', async (req, res) => {

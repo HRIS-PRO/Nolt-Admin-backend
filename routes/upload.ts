@@ -43,7 +43,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     try {
         const file = req.file;
-        const { loan_id, document_type } = req.body;
+        const { loan_id, investment_id, document_type } = req.body;
 
         // Safely access user ID, defaulting to null if guest (for now, to prevent crash)
         // @ts-ignore
@@ -51,27 +51,31 @@ router.post('/', upload.single('file'), async (req, res) => {
         // @ts-ignore
         const userRole = req.user ? req.user.role : 'guest';
 
-        if (!file || !loan_id || !document_type) {
-            return res.status(400).json({ message: "Missing file, loan_id, or document_type" });
+        if (!file || (!loan_id && !investment_id) || !document_type) {
+            return res.status(400).json({ message: "Missing file, loan_id/investment_id, or document_type" });
         }
 
         // Determine if this is a staff upload
         const isStaff = userRole === 'admin' || userRole === 'staff';
 
-        // Generate a unique path: loan_{id}/{timestamp}_{filename}
+        // Context: Loan or Investment
+        const contextType = loan_id ? 'loan' : 'investment';
+        const contextId = loan_id || investment_id;
+
+        // Generate a unique path: {context}_{id}/{timestamp}_{filename}
         const timestamp = Date.now();
         const safeFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const path = `loan_${loan_id}/${timestamp}_${safeFilename}`;
+        const path = `${contextType}_${contextId}/${timestamp}_${safeFilename}`;
 
-        // Determine if loan_id is actual ID (number) or draft ID (string starting with L-)
-        let finalLoanId: number | null = null;
+        // Determine if ID is actual ID (number) or draft ID (string starting with L- or I-)
+        let finalId: number | null = null;
         let finalDraftId: string | null = null;
 
-        const loanIdStr = String(loan_id);
-        if (loanIdStr.startsWith('L-') || isNaN(parseInt(loanIdStr))) {
-            finalDraftId = loanIdStr;
+        const idStr = String(contextId);
+        if (idStr.startsWith('L-') || idStr.startsWith('I-') || isNaN(parseInt(idStr))) {
+            finalDraftId = idStr;
         } else {
-            finalLoanId = parseInt(loanIdStr);
+            finalId = parseInt(idStr);
         }
 
         // Upload to Supabase (with compression)
@@ -80,29 +84,46 @@ router.post('/', upload.single('file'), async (req, res) => {
 
 
         // Record in Database
-        const [doc] = await sql`
-            INSERT INTO loan_documents (
-                loan_id, draft_id, document_type, file_url, file_path, 
-                file_name, mime_type, size_bytes, 
-                uploaded_by_user_id, is_staff_upload
-            ) VALUES (
-                ${finalLoanId}, ${finalDraftId}, ${document_type}, ${uploadResult.url}, ${uploadResult.path},
-                ${file.originalname}, ${uploadResult.mimeType}, ${uploadResult.size},
-                ${userId}, ${isStaff}
-            )
-            RETURNING *
-        `;
+        let doc;
+        if (contextType === 'loan') {
+            [doc] = await sql`
+                INSERT INTO loan_documents (
+                    loan_id, draft_id, document_type, file_url, file_path, 
+                    file_name, mime_type, size_bytes, 
+                    uploaded_by_user_id, is_staff_upload
+                ) VALUES (
+                    ${finalId}, ${finalDraftId}, ${document_type}, ${uploadResult.url}, ${uploadResult.path},
+                    ${file.originalname}, ${uploadResult.mimeType}, ${uploadResult.size},
+                    ${userId}, ${isStaff}
+                )
+                RETURNING *
+            `;
 
-        // Log Activity if Staff
-        if (isStaff && finalLoanId) {
-            try {
-                await sql`
-                    INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
-                    VALUES (${finalLoanId}, ${userId}, 'document_upload', ${`Uploaded document: ${document_type}`}, ${JSON.stringify({ file_name: file.originalname, file_url: uploadResult.url })})
-                `;
-            } catch (logError) {
-                console.error("Failed to log activity for upload:", logError);
+            // Log Activity if Staff
+            if (isStaff && finalId) {
+                try {
+                    await sql`
+                        INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+                        VALUES (${finalId}, ${userId}, 'document_upload', ${`Uploaded document: ${document_type}`}, ${JSON.stringify({ file_name: file.originalname, file_url: uploadResult.url })})
+                    `;
+                } catch (logError) {
+                    console.error("Failed to log activity for upload:", logError);
+                }
             }
+        } else {
+            // Investment Documents
+            [doc] = await sql`
+                INSERT INTO investment_documents (
+                    investment_id, draft_id, document_type, file_url, file_path, 
+                    file_name, mime_type, size_bytes, 
+                    uploaded_by_user_id, is_staff_upload
+                ) VALUES (
+                    ${finalId}, ${finalDraftId}, ${document_type}, ${uploadResult.url}, ${uploadResult.path},
+                    ${file.originalname}, ${uploadResult.mimeType}, ${uploadResult.size},
+                    ${userId}, ${isStaff}
+                )
+                RETURNING *
+            `;
         }
 
         res.status(201).json({
@@ -110,9 +131,9 @@ router.post('/', upload.single('file'), async (req, res) => {
             document: doc
         });
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Upload failed:", error);
-        res.status(500).json({ message: "Internal Server Error" });
+        res.status(500).json({ message: "Internal Server Error", error: error.message });
     }
 });
 
