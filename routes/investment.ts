@@ -40,8 +40,7 @@ const isAuthenticated = (req: any, res: any, next: any) => {
  *               rep_street_address: { type: string }
  *               investment_amount: { type: number }
  *               tenure_days: { type: number }
- *               investment_amount: { type: number }
- *               tenure_days: { type: number }
+
  *               currency: { type: string, enum: [NGN, USD] }
  *               signatures: { type: array, items: { type: string } }
  *               cac_url: { type: string }

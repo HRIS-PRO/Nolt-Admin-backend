@@ -908,7 +908,7 @@ router.post('/loans/application', async (req, res) => {
                 ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
                 ${work_id_url || null}, ${payslip_url || null},
                 ${references ? sql.json(references) : null},
-                'pending', 'credit_check_1'
+                'pending', 'sales'
             )
             RETURNING id
         `;
