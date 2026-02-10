@@ -437,4 +437,53 @@ router.post('/loans', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/loans:
+ *   get:
+ *     summary: Get all loans for the current customer
+ *     tags: [Customers]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: List of loans
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: integer
+ *                   requested_loan_amount:
+ *                     type: number
+ *                   status:
+ *                     type: string
+ *                   created_at:
+ *                     type: string
+ *       401:
+ *         description: Unauthorized
+ */
+router.get('/loans', async (req, res) => {
+    if (req.isAuthenticated()) {
+        try {
+            // @ts-ignore
+            const customerId = req.user.id;
+            const loans = await sql`
+                SELECT * FROM loans 
+                WHERE customer_id = ${customerId}
+                ORDER BY created_at DESC
+            `;
+            res.json(loans);
+        } catch (error) {
+            console.error("Error fetching customer loans:", error);
+            res.status(500).json({ message: "Internal Server Error" });
+        }
+    } else {
+        res.status(401).json({ message: "Unauthorized" });
+    }
+});
+
 export default router;
