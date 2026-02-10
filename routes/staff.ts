@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import sql from '../config/db.js';
+import { resendService } from '../services/resendService.js';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
-import { resendService } from '../services/resendService.js';
 
 const router = Router();
 
@@ -393,15 +393,15 @@ router.get('/loans/:id', async (req, res) => {
         const loans = await sql`
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
+                l.surname, l.first_name, l.middle_name, -- Added individual name fields
                 l.gender, l.date_of_birth, l.marital_status, l.religion, l.mothers_maiden_name, l.is_politically_exposed, l.title,
                 l.mobile_number, l.personal_email, l.primary_home_address, l.residential_status, l.state_of_residence, l.state_of_origin,
                 l.average_monthly_income, l.number_of_dependents, l.has_active_loans,
                 l.mda_tertiary, l.ippis_number,
                 l.govt_id_url, l.statement_of_account_url, l.proof_of_residence_url, l.selfie_verification_url,
+                l.work_id_url, l.payslip_url, -- Added missing docs
                 l.customer_references, l.signatures, l.updated_at, l.eligible_amount, l.sales_officer_id,
-                -- Mask Sensitive Data by Default
-                '*******' as bvn,
-                '*******' as nin,
+                l.bvn, l.nin, -- Unmasked for editing
                 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
@@ -450,6 +450,121 @@ router.get('/loans/:id/activities', async (req, res) => {
         res.json(activities);
     } catch (error) {
         console.error("Error fetching activities:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/loans/{id}:
+ *   put:
+ *     summary: Update a loan application (Edit Mode)
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Loan application updated successfully
+ *       403:
+ *         description: Unauthorized
+ */
+router.put('/loans/:id', async (req, res) => {
+    const { id } = req.params;
+    // @ts-ignore
+    const user = req.user as any;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+    // Validate Permissions: Only Sales Officers/Managers or SuperAdmins can edit
+    // And ideally only when stage is 'sales' (or 'submitted'?)
+    const allowedRoles = ['sales_officer', 'sales_manager', 'super_admin', 'superadmin'];
+    if (!allowedRoles.includes(user.role)) {
+        return res.status(403).json({ message: "You do not have permission to edit applications." });
+    }
+
+    // Check current stage of loan to ensure it's editable
+    const [existingLoan] = await sql`SELECT stage, personal_email FROM loans WHERE id = ${id}`;
+    if (!existingLoan) return res.status(404).json({ message: "Loan not found" });
+
+    const editableStages = ['sales', 'submitted'];
+    if (!editableStages.includes(existingLoan.stage) && user.role !== 'super_admin') {
+        return res.status(403).json({ message: `Cannot edit application in ${existingLoan.stage} stage.` });
+    }
+
+    const {
+        // Identity
+        title, surname, first_name, middle_name,
+        gender, date_of_birth, religion, marital_status,
+        mothers_maiden_name, mobile_number, personal_email, bvn, nin,
+
+        // Address
+        state_of_origin, state_of_residence, residential_status, primary_home_address,
+
+        // Employment
+        mda_tertiary, ippis_number, average_monthly_income,
+
+        // Loan
+        requested_loan_amount, loan_tenure_months,
+
+        // Documents (URLs) - Logic handled by frontend uploading first usually, but we accept updates here
+        govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
+        work_id_url, payslip_url,
+
+        // References
+        references
+    } = req.body;
+
+    try {
+        const applicant_full_name = `${surname} ${first_name} ${middle_name || ''}`.trim();
+
+        await sql`
+            UPDATE loans
+            SET 
+                surname = ${surname}, first_name = ${first_name}, middle_name = ${middle_name || null}, applicant_full_name = ${applicant_full_name},
+                mobile_number = ${mobile_number}, personal_email = ${personal_email || null},
+                title = ${title || null}, gender = ${gender || null}, date_of_birth = ${date_of_birth || null}, 
+                religion = ${religion || null}, marital_status = ${marital_status || null}, mothers_maiden_name = ${mothers_maiden_name || null},
+                bvn = ${bvn || null}, nin = ${nin || null},
+                state_of_origin = ${state_of_origin || null}, state_of_residence = ${state_of_residence || null}, 
+                residential_status = ${residential_status || null}, primary_home_address = ${primary_home_address || null},
+                mda_tertiary = ${mda_tertiary || null}, ippis_number = ${ippis_number || null}, average_monthly_income = ${average_monthly_income || 0},
+                requested_loan_amount = ${requested_loan_amount}, loan_tenure_months = ${loan_tenure_months || 6},
+                govt_id_url = ${govt_id_url || null}, statement_of_account_url = ${statement_of_account_url || null}, 
+                proof_of_residence_url = ${proof_of_residence_url || null}, selfie_verification_url = ${selfie_verification_url || null},
+                work_id_url = ${work_id_url || null}, payslip_url = ${payslip_url || null},
+                customer_references = ${references ? sql.json(references) : null},
+                updated_at = NOW()
+            WHERE id = ${id}
+        `;
+
+        // Check if email changed and log it
+        if (existingLoan.personal_email !== personal_email) {
+            await sql`
+                INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+                VALUES (${id}, ${user.id}, 'email_update', ${`Email updated from ${existingLoan.personal_email} to ${personal_email}`}, ${JSON.stringify({ old_email: existingLoan.personal_email, new_email: personal_email, updatedBy: user.email })})
+            `;
+        }
+
+        // Log General Edit Activity
+        await sql`
+            INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+            VALUES (${id}, ${user.id}, 'edit_application', 'Sales Officer edited application details', ${JSON.stringify({ updatedBy: user.email })})
+        `;
+
+        res.json({ message: "Loan application updated successfully" });
+
+    } catch (error) {
+        console.error("Error updating loan:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -536,6 +651,23 @@ router.get('/loans/:id/documents', async (req, res) => {
     }
 });
 
+router.get('/loans/:id/comments', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const comments = await sql`
+            SELECT lc.*, u.full_name as user_name, u.role as user_role, u.avatar_url
+            FROM loan_comments lc
+            LEFT JOIN customers u ON lc.user_id = u.id
+            WHERE lc.loan_id = ${id}
+            ORDER BY lc.created_at DESC
+        `;
+        res.json(comments);
+    } catch (error) {
+        console.error("Error fetching comments:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 /**
  * @swagger
  * /staff/loans/{id}/action:
@@ -570,7 +702,7 @@ router.get('/loans/:id/documents', async (req, res) => {
  */
 router.post('/loans/:id/action', async (req, res) => {
     const { id } = req.params;
-    const { action, data } = req.body;
+    const { action, data, reason } = req.body;
     // @ts-ignore
     const user = req.user as any;
 
@@ -601,32 +733,46 @@ router.post('/loans/:id/action', async (req, res) => {
 
         // --- STAGE TRANSITION LOGIC ---
 
+        // 0. Sales -> Customer Experience (Review)
+        if (currentStage === 'sales') {
+            if (!canAct(['sales_officer', 'sales_manager'], 'sales')) {
+                return res.status(403).json({ message: "Only Sales Officers/Managers can process Sales stage" });
+            }
+            if (action === 'approve') nextStage = 'customer_experience';
+        }
+
         // 1. Customer Experience -> Credit Check 1
-        if (currentStage === 'submitted' || currentStage === 'customer_experience') {
-            if (!canAct(['customer_experience', 'customer_service'], currentStage)) {
+        else if (currentStage === 'submitted' || currentStage === 'customer_experience') {
+            // Allow Sales Officers/Managers to also act on this stage as requested
+            if (!canAct(['customer_experience', 'customer_service', 'sales_officer', 'sales_manager'], currentStage)) {
                 // Determine if we should allow 'submitted' to be picked up by CX
                 // For now, treat 'submitted' same as 'customer_experience' active work
-                if (!canAct(['customer_experience', 'customer_service'], 'customer_experience') && currentStage !== 'submitted') {
+                if (!canAct(['customer_experience', 'customer_service', 'sales_officer', 'sales_manager'], 'customer_experience') && currentStage !== 'submitted') {
                     return res.status(403).json({ message: `Role ${user.role} cannot act on stage ${currentStage}` });
                 }
             }
             if (action === 'approve') nextStage = 'credit_check_1';
+            if (action === 'return') nextStage = 'sales';
         }
 
-        // 2. Credit Check 1 (Sales Officer) -> Credit Check 2 (Sales Manager)
+        // 2. Credit Check 1 (Credit Officer) -> Credit Check 2 (Credit Manager)
         else if (currentStage === 'credit_check_1') {
-            if (!canAct('sales_officer', 'credit_check_1')) {
-                return res.status(403).json({ message: "Only Sales Officers can process Credit Check 1" });
+            if (!canAct('credit_officer', 'credit_check_1')) {
+                return res.status(403).json({ message: "Only Credit Officers can process Credit Check 1" });
             }
-            if (action === 'approve') nextStage = 'credit_check_2';
+            if (action === 'approve') {
+                if (data?.eligible_amount) {
+                    updateData = { eligible_amount: parseFloat(data.eligible_amount) };
+                }
+                nextStage = 'credit_check_2';
+            }
             if (action === 'return') nextStage = 'customer_experience';
         }
 
-        // 3. Credit Check 2 (Sales Manager) -> Internal Audit
+        // 3. Credit Check 2 (Credit Manager) -> Internal Audit
         else if (currentStage === 'credit_check_2') {
-            // Assuming role is 'sales_manager' or 'credit_manager' based on system
-            if (!canAct(['sales_manager', 'credit_manager'], 'credit_check_2')) {
-                return res.status(403).json({ message: "Only Sales/Credit Managers can process Credit Check 2" });
+            if (!canAct('credit_manager', 'credit_check_2')) {
+                return res.status(403).json({ message: "Only Credit Managers can process Credit Check 2" });
             }
 
             if (action === 'approve') {
@@ -705,12 +851,65 @@ router.post('/loans/:id/action', async (req, res) => {
                     ? `Application rejected at ${currentStage.replace(/_/g, ' ')}`
                     : `Moved application from ${currentStage.replace(/_/g, ' ')} to ${nextStage.replace(/_/g, ' ')}`;
 
+
+                // Log Activity
                 await sql`
-                    INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
-                    VALUES (${id}, ${user.id}, ${action}, ${activityDescription}, ${JSON.stringify({ from: currentStage, to: nextStage || 'rejected', ...updateData })})
-                `;
+            INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+            VALUES (${id}, ${user.id}, ${action}, ${activityDescription}, ${JSON.stringify({ from: currentStage, to: nextStage || 'rejected', ...updateData })})
+        `;
+
+                if (reason) {
+                    await sql`
+                INSERT INTO loan_comments (loan_id, user_id, comment)
+                VALUES (${id}, ${user.id}, ${reason})
+            `;
+                }
+
+                // --- SEND EMAIL NOTIFICATIONS ---
+                if (action !== 'reject' && nextStage) {
+                    let targetRoles: string[] = [];
+
+                    switch (nextStage) {
+                        case 'sales':
+                            targetRoles = ['sales_officer', 'sales_manager', 'super_admin'];
+                            break;
+                        case 'customer_experience':
+                            targetRoles = ['customer_experience', 'customer_service', 'sales_officer', 'sales_manager', 'super_admin'];
+                            break;
+                        case 'credit_check_1':
+                            targetRoles = ['credit_officer', 'super_admin']; // STRICT
+                            break;
+                        case 'credit_check_2':
+                            targetRoles = ['credit_manager', 'super_admin']; // STRICT
+                            break;
+                        case 'internal_audit':
+                            targetRoles = ['internal_audit', 'super_admin'];
+                            break;
+                        case 'finance':
+                            targetRoles = ['finance', 'super_admin'];
+                            break;
+                        // For 'disbursed', maybe notify Sales? (Optional)
+                        case 'disbursed':
+                            targetRoles = ['sales_officer', 'sales_manager', 'super_admin'];
+                            break;
+                    }
+
+                    if (targetRoles.length > 0) {
+                        // Fetch emails of staff with these roles
+                        const staff = await sql`
+                            SELECT email FROM customers 
+                            WHERE role = ANY(${targetRoles}) AND is_active = true
+                        `;
+
+                        const emails = staff.map(s => s.email);
+                        if (emails.length > 0) {
+                            await resendService.sendStageNotification(emails, id, nextStage);
+                        }
+                    }
+                }
+
             } catch (logError) {
-                console.error("Failed to log activity:", logError);
+                console.error("Failed to log activity or send email:", logError);
                 // Non-blocking error
             }
 
@@ -828,10 +1027,13 @@ router.post('/loans/application', async (req, res) => {
         state_of_origin, state_of_residence, residential_status, primary_home_address,
 
         // Employment
-        mda_tertiary, ippis_number, average_monthly_income,
+        mda_tertiary, ippis_number, staff_id, average_monthly_income,
 
         // Loan
         requested_loan_amount, loan_tenure_months,
+
+        // Bank Details
+        bank_name, account_number, account_name,
 
         // Documents
         work_id_url, payslip_url,
@@ -890,8 +1092,9 @@ router.post('/loans/application', async (req, res) => {
                 title, gender, date_of_birth, religion, marital_status, mothers_maiden_name,
                 bvn, nin,
                 state_of_origin, state_of_residence, residential_status, primary_home_address,
-                mda_tertiary, ippis_number, average_monthly_income,
+                mda_tertiary, ippis_number, staff_id, average_monthly_income,
                 requested_loan_amount, loan_tenure_months,
+                bank_name, account_number, account_name,
                 govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
                 work_id_url, payslip_url,
                 customer_references,
@@ -903,8 +1106,9 @@ router.post('/loans/application', async (req, res) => {
                 ${title || null}, ${gender || null}, ${date_of_birth || null}, ${religion || null}, ${marital_status || null}, ${mothers_maiden_name || null},
                 ${bvn || null}, ${nin || null},
                 ${state_of_origin || null}, ${state_of_residence || null}, ${residential_status || null}, ${primary_home_address || null},
-                ${mda_tertiary || null}, ${ippis_number || null}, ${average_monthly_income || 0},
+                ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${average_monthly_income || 0},
                 ${requested_loan_amount}, ${loan_tenure_months || 6},
+                ${bank_name || null}, ${account_number || null}, ${account_name || null},
                 ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
                 ${work_id_url || null}, ${payslip_url || null},
                 ${references ? sql.json(references) : null},
