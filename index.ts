@@ -21,7 +21,7 @@ app.use(cors({
         if (!origin) return callback(null, true);
 
         // Allowed origins
-        const allowedOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'];
+        const allowedOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'https://lms.noltfinance.com'];
 
         if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.vercel.app')) {
             callback(null, true);
