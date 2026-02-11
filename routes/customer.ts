@@ -90,6 +90,7 @@ router.get('/me', async (req, res) => {
 });
 
 import sql from '../config/db.js';
+import { resendService } from '../services/resendService.js';
 
 /**
  * @swagger
@@ -426,6 +427,20 @@ router.post('/loans', async (req, res) => {
                 )
                 RETURNING *
             `;
+
+            // Send Notification to Sales Officer
+            if (assignedOfficerId) {
+                try {
+                    const [officer] = await sql`SELECT email, full_name, role FROM customers WHERE id = ${assignedOfficerId}`;
+                    if (officer && officer.email) {
+                        // Send notification about new loan in 'sales' stage
+                        await resendService.sendStageNotification([officer.email], loan.id, 'sales');
+                        console.log(`Notification sent to Sales Officer (${officer.email}) for Loan ${loan.id}`);
+                    }
+                } catch (emailError) {
+                    console.error("Failed to send submission notification:", emailError);
+                }
+            }
 
             res.status(201).json({ message: "Loan application submitted successfully", loanId: loan.id });
         } catch (error) {

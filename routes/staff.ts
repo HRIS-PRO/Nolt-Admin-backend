@@ -397,11 +397,12 @@ router.get('/loans/:id', async (req, res) => {
                 l.gender, l.date_of_birth, l.marital_status, l.religion, l.mothers_maiden_name, l.is_politically_exposed, l.title,
                 l.mobile_number, l.personal_email, l.primary_home_address, l.residential_status, l.state_of_residence, l.state_of_origin,
                 l.average_monthly_income, l.number_of_dependents, l.has_active_loans,
-                l.mda_tertiary, l.ippis_number,
+                l.mda_tertiary, l.ippis_number, l.staff_id,
                 l.govt_id_url, l.statement_of_account_url, l.proof_of_residence_url, l.selfie_verification_url,
                 l.work_id_url, l.payslip_url, -- Added missing docs
                 l.customer_references, l.signatures, l.updated_at, l.eligible_amount, l.sales_officer_id,
                 l.bvn, l.nin, -- Unmasked for editing
+                l.bank_name, l.account_number, l.account_name, -- Added bank details
                 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
@@ -866,6 +867,26 @@ router.post('/loans/:id/action', async (req, res) => {
                 }
 
                 // --- SEND EMAIL NOTIFICATIONS ---
+
+                // NEW LOGIC: Notify assigned Sales Officer on specific events
+                const shouldNotifySales = (
+                    (nextStage === 'credit_check_2') ||
+                    (nextStage === 'disbursed') ||
+                    (nextStage === 'sales') || // If returned to sales
+                    (action === 'reject')
+                );
+
+                if (shouldNotifySales && loan.sales_officer_id) {
+                    const [officer] = await sql`SELECT email FROM customers WHERE id = ${loan.sales_officer_id}`;
+                    if (officer && officer.email) {
+                        const stageForEmail = action === 'reject' ? 'rejected' : nextStage;
+                        await resendService.sendStageNotification([officer.email], id, stageForEmail);
+                        console.log(`Notification sent to Assigned Sales Officer (${officer.email}) regarding ${stageForEmail}`);
+                    }
+                }
+
+                /* 
+                // OLD LOGIC (DISABLED): Notify all staff in the next stage
                 if (action !== 'reject' && nextStage) {
                     let targetRoles: string[] = [];
 
@@ -873,6 +894,7 @@ router.post('/loans/:id/action', async (req, res) => {
                         case 'sales':
                             targetRoles = ['sales_officer', 'sales_manager', 'super_admin'];
                             break;
+                            // ... (rest of old logic)
                         case 'customer_experience':
                             targetRoles = ['customer_experience', 'customer_service', 'sales_officer', 'sales_manager', 'super_admin'];
                             break;
@@ -907,6 +929,7 @@ router.post('/loans/:id/action', async (req, res) => {
                         }
                     }
                 }
+                */
 
             } catch (logError) {
                 console.error("Failed to log activity or send email:", logError);
@@ -1019,7 +1042,7 @@ router.post('/loans/application', async (req, res) => {
 
     const {
         // Identity
-        title, surname, first_name, middle_name,
+        title, product_type, surname, first_name, middle_name,
         gender, date_of_birth, religion, marital_status,
         mothers_maiden_name, mobile_number, personal_email, bvn, nin,
 
@@ -1098,7 +1121,7 @@ router.post('/loans/application', async (req, res) => {
                 govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
                 work_id_url, payslip_url,
                 customer_references,
-                status, stage
+                status, stage, product_type
             ) VALUES (
                 ${customerId}, ${officer.id},
                 ${surname}, ${first_name}, ${middle_name || null}, ${applicant_full_name},
@@ -1112,7 +1135,7 @@ router.post('/loans/application', async (req, res) => {
                 ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
                 ${work_id_url || null}, ${payslip_url || null},
                 ${references ? sql.json(references) : null},
-                'pending', 'sales'
+                'pending', 'sales', ${product_type}
             )
             RETURNING id
         `;
