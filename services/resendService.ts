@@ -98,7 +98,7 @@ export const resendService = {
 
                         <p>Please login and change your password immediately.</p>
                         
-                        <a href="https://nolt-finance.vercel.app/login" style="display: inline-block; background-color: #000; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin-top: 10px;">Login to Dashboard</a>
+                        <a href="https://lms.noltfinance.com/login" style="display: inline-block; background-color: #000; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin-top: 10px;">Login to Dashboard</a>
                     </div>
                 `
             });
