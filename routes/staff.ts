@@ -247,11 +247,11 @@ router.get('/loans', async (req, res) => {
 
         // Build Filters
         const filters = [];
-        if (status) filters.push(sql`l.status = ${status}`);
-        if (stage) filters.push(sql`l.stage = ${stage}`);
+        if (typeof status === 'string' && status) filters.push(sql`l.status = ${status}`);
+        if (typeof stage === 'string' && stage) filters.push(sql`l.stage = ${stage}`);
         if ((req.user as any)?.role === 'sales_officer') filters.push(sql`l.sales_officer_id = ${(req.user as any).id}`);
 
-        if (search) {
+        if (typeof search === 'string' && search) {
             const searchPattern = `%${search}%`;
             filters.push(sql`(
                 l.applicant_full_name ILIKE ${searchPattern} OR 
@@ -261,7 +261,7 @@ router.get('/loans', async (req, res) => {
             )`);
         }
 
-        const whereClause = filters.length > 0 ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
+        const whereClause = filters.length > 0 ? sql`WHERE ${filters.reduce((acc, curr, i) => i === 0 ? curr : sql`${acc} AND ${curr}`, sql``)}` : sql``;
 
         const loans = await sql`
             SELECT 
@@ -769,9 +769,23 @@ router.post('/loans/:id/action', async (req, res) => {
             return hasRole && currentStage === allowedStage;
         };
 
+        const STAGE_ORDER = ['submitted', 'sales', 'customer_experience', 'credit_check_1', 'credit_check_2', 'internal_audit', 'finance', 'disbursed'];
         let nextStage = '';
-
         let updateData: Record<string, any> = {};
+
+        // Helper to validate return target
+        const getReturnStage = (defaultReturn: string) => {
+            if (action === 'return' && data?.target_stage) {
+                const currentIndex = STAGE_ORDER.indexOf(currentStage === 'credit_check' ? 'credit_check_1' : currentStage);
+                const targetIndex = STAGE_ORDER.indexOf(data.target_stage);
+
+                // Allow return only to previous stages
+                if (targetIndex !== -1 && targetIndex < currentIndex) {
+                    return data.target_stage;
+                }
+            }
+            return defaultReturn;
+        };
 
         // --- STAGE TRANSITION LOGIC ---
 
@@ -795,7 +809,7 @@ router.post('/loans/:id/action', async (req, res) => {
                 }
             }
             if (action === 'approve') nextStage = 'credit_check_1';
-            if (action === 'return') nextStage = 'sales';
+            if (action === 'return') nextStage = getReturnStage('sales');
         }
 
         // 2. Credit Check 1 (Credit Officer) -> Credit Check 2 (Credit Manager)
@@ -808,7 +822,7 @@ router.post('/loans/:id/action', async (req, res) => {
                 if (data?.tenure) updateData.loan_tenure_months = parseInt(data.tenure);
                 nextStage = 'credit_check_2';
             }
-            if (action === 'return') nextStage = 'customer_experience';
+            if (action === 'return') nextStage = getReturnStage('customer_experience');
         }
 
         // 3. Credit Check 2 (Credit Manager) -> Internal Audit
@@ -826,7 +840,7 @@ router.post('/loans/:id/action', async (req, res) => {
 
                 nextStage = 'internal_audit';
             }
-            if (action === 'return') nextStage = 'credit_check_1';
+            if (action === 'return') nextStage = getReturnStage('credit_check_1');
         }
 
         // 4. Internal Audit -> Finance
@@ -835,7 +849,7 @@ router.post('/loans/:id/action', async (req, res) => {
                 return res.status(403).json({ message: "Only Internal Audit can process this stage" });
             }
             if (action === 'approve') nextStage = 'finance';
-            if (action === 'return') nextStage = 'credit_check_2';
+            if (action === 'return') nextStage = getReturnStage('credit_check_2');
         }
 
         // 5. Finance -> Disbursed
@@ -847,7 +861,7 @@ router.post('/loans/:id/action', async (req, res) => {
                 nextStage = 'disbursed';
                 updateData.status = 'approved'; // Final status
             }
-            if (action === 'return') nextStage = 'internal_audit';
+            if (action === 'return') nextStage = getReturnStage('internal_audit');
         }
 
         else if (currentStage === 'disbursed') {
