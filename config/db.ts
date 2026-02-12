@@ -7,7 +7,7 @@ if (!connectionString) {
 }
 
 const sql = postgres(connectionString, {
-    max: 20, // Max number of connections
+    max: 5, // Reduced to max 5 to share with session pool
     idle_timeout: 30, // Idle connection timeout in seconds
     connect_timeout: 10, // Connect timeout in seconds
 })

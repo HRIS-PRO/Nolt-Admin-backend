@@ -1366,4 +1366,88 @@ router.patch('/loans/:id/attribute', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/staff/reports:
+ *   get:
+ *     summary: Get loan reports (approved/rejected)
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *         description: Filter by status (approved, rejected, all)
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: List of loans for report
+ */
+router.get('/reports', async (req, res) => {
+    try {
+        const { status, startDate, endDate } = req.query;
+
+        // Build Filters
+        const filters = [];
+
+        // Status Filter: 'approved' maps to 'disbursed' stage or 'approved' status
+        if (status === 'approved') {
+            filters.push(sql`(l.stage = 'disbursed' OR l.status = 'approved')`);
+        } else if (status === 'rejected') {
+            filters.push(sql`(l.stage = 'rejected' OR l.status = 'rejected')`);
+        } else {
+            // Default: Show both approved and rejected
+            filters.push(sql`(l.stage = 'disbursed' OR l.status = 'approved' OR l.stage = 'rejected' OR l.status = 'rejected')`);
+        }
+
+        // Date Filters
+        if (typeof startDate === 'string' && startDate) filters.push(sql`l.created_at >= ${startDate}`);
+        if (typeof endDate === 'string' && endDate) filters.push(sql`l.created_at <= ${endDate}::date + interval '1 day'`); // Include end date
+
+        const whereClause = filters.length > 0
+            ? sql`WHERE ${filters.reduce((acc, curr, i) => i === 0 ? curr : sql`${acc} AND ${curr}`, sql``)}`
+            : sql``;
+
+        const reports = await sql`
+            SELECT 
+                l.applicant_full_name,
+                l.mda_tertiary,
+                l.eligible_amount, -- Approved Amount
+                l.requested_loan_amount,
+                l.average_monthly_income, -- Net Salary (proxy)
+                l.account_number,
+                l.bank_name,
+                l.loan_tenure_months,
+                l.product_type,
+                -- Branch is missing in DB
+                c.full_name as officer_name,
+                l.loan_type,
+                l.ippis_number,
+                l.staff_id,
+                l.mobile_number,
+                l.created_at,
+                l.status,
+                l.stage
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
+            ${whereClause}
+            ORDER BY l.created_at DESC
+        `;
+
+        res.json(reports);
+    } catch (error) {
+        console.error("Error fetching reports:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;
