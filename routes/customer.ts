@@ -407,7 +407,8 @@ router.post('/loans', async (req, res) => {
                     requested_loan_amount, loan_tenure_months, signatures,
                     mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount,
                     bank_name, account_number, account_name,
-                    sales_officer_id
+                    sales_officer_id,
+                    loan_type
                 ) VALUES (
                     ${customerId},
                     ${applying_for_others || false}, ${relationship_to_applicant || null},
@@ -423,7 +424,8 @@ router.post('/loans', async (req, res) => {
                     ${requested_loan_amount || 0}, ${loan_tenure_months || 0}, ${signatures || null},
                     ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${referral_code || null}, ${eligible_amount || 0},
                     ${bank_name || null}, ${account_number || null}, ${account_name || null},
-                    ${assignedOfficerId}
+                    ${assignedOfficerId},
+                    'new'
                 )
                 RETURNING *
             `;

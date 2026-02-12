@@ -242,15 +242,52 @@ router.post('/complete-setup', async (req, res) => {
  */
 router.get('/loans', async (req, res) => {
     try {
+        const { page = 1, limit = 10, search = '', status = '', stage = '' } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+
+        // Build Filters
+        const filters = [];
+        if (status) filters.push(sql`l.status = ${status}`);
+        if (stage) filters.push(sql`l.stage = ${stage}`);
+        if ((req.user as any)?.role === 'sales_officer') filters.push(sql`l.sales_officer_id = ${(req.user as any).id}`);
+
+        if (search) {
+            const searchPattern = `%${search}%`;
+            filters.push(sql`(
+                l.applicant_full_name ILIKE ${searchPattern} OR 
+                l.id::text ILIKE ${searchPattern} OR
+                c.full_name ILIKE ${searchPattern} OR
+                c.email ILIKE ${searchPattern}
+            )`);
+        }
+
+        const whereClause = filters.length > 0 ? sql`WHERE ${sql.join(filters, sql` AND `)}` : sql``;
+
         const loans = await sql`
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
-                c.full_name as officer_name, c.email as officer_email
+                c.full_name as officer_name, c.email as officer_email, l.sales_officer_id
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
+            ${whereClause}
             ORDER BY l.created_at DESC
+            LIMIT ${Number(limit)} OFFSET ${offset}
         `;
-        res.json(loans);
+
+        const [countResult] = await sql`
+            SELECT COUNT(l.id) as total
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
+            ${whereClause}
+        `;
+
+        res.json({
+            loans,
+            total: Number(countResult.total),
+            page: Number(page),
+            limit: Number(limit)
+        });
+
     } catch (error) {
         console.error("Error fetching loans:", error);
         res.status(500).json({ message: "Internal server error" });
@@ -276,6 +313,9 @@ router.get('/loans/pending', async (req, res) => {
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
             WHERE l.status = 'pending'
+            ${(req.user as any)?.role === 'sales_officer'
+                ? sql`AND l.sales_officer_id = ${(req.user as any).id}`
+                : sql``}
             ORDER BY l.created_at DESC
         `;
         res.json(loans);
@@ -402,7 +442,8 @@ router.get('/loans/:id', async (req, res) => {
                 l.work_id_url, l.payslip_url, -- Added missing docs
                 l.customer_references, l.signatures, l.updated_at, l.eligible_amount, l.sales_officer_id,
                 l.bvn, l.nin, -- Unmasked for editing
-                l.bank_name, l.account_number, l.account_name, -- Added bank details
+                l.bank_name, l.account_number, l.loan_tenure_months, l.account_name, -- Added bank details
+                l.loan_type, -- Added loan type
                 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
@@ -515,7 +556,7 @@ router.put('/loans/:id', async (req, res) => {
         mda_tertiary, ippis_number, average_monthly_income,
 
         // Loan
-        requested_loan_amount, loan_tenure_months,
+        requested_loan_amount, loan_tenure_months, loan_type,
 
         // Documents (URLs) - Logic handled by frontend uploading first usually, but we accept updates here
         govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
@@ -539,7 +580,7 @@ router.put('/loans/:id', async (req, res) => {
                 state_of_origin = ${state_of_origin || null}, state_of_residence = ${state_of_residence || null}, 
                 residential_status = ${residential_status || null}, primary_home_address = ${primary_home_address || null},
                 mda_tertiary = ${mda_tertiary || null}, ippis_number = ${ippis_number || null}, average_monthly_income = ${average_monthly_income || 0},
-                requested_loan_amount = ${requested_loan_amount}, loan_tenure_months = ${loan_tenure_months || 6},
+                requested_loan_amount = ${requested_loan_amount}, loan_tenure_months = ${loan_tenure_months || 6}, loan_type = ${loan_type || 'new'},
                 govt_id_url = ${govt_id_url || null}, statement_of_account_url = ${statement_of_account_url || null}, 
                 proof_of_residence_url = ${proof_of_residence_url || null}, selfie_verification_url = ${selfie_verification_url || null},
                 work_id_url = ${work_id_url || null}, payslip_url = ${payslip_url || null},
@@ -744,11 +785,12 @@ router.post('/loans/:id/action', async (req, res) => {
 
         // 1. Customer Experience -> Credit Check 1
         else if (currentStage === 'submitted' || currentStage === 'customer_experience') {
-            // Allow Sales Officers/Managers to also act on this stage as requested
-            if (!canAct(['customer_experience', 'customer_service', 'sales_officer', 'sales_manager'], currentStage)) {
+            // Updated Logic: Sales Officers/Managers can NO LONGER act on this stage. Only CX/CS.
+            if (!canAct(['customer_experience', 'customer_service'], currentStage)) {
+
                 // Determine if we should allow 'submitted' to be picked up by CX
                 // For now, treat 'submitted' same as 'customer_experience' active work
-                if (!canAct(['customer_experience', 'customer_service', 'sales_officer', 'sales_manager'], 'customer_experience') && currentStage !== 'submitted') {
+                if (!canAct(['customer_experience', 'customer_service'], 'customer_experience') && currentStage !== 'submitted') {
                     return res.status(403).json({ message: `Role ${user.role} cannot act on stage ${currentStage}` });
                 }
             }
@@ -762,9 +804,8 @@ router.post('/loans/:id/action', async (req, res) => {
                 return res.status(403).json({ message: "Only Credit Officers can process Credit Check 1" });
             }
             if (action === 'approve') {
-                if (data?.eligible_amount) {
-                    updateData = { eligible_amount: parseFloat(data.eligible_amount) };
-                }
+                if (data?.eligible_amount) updateData.eligible_amount = parseFloat(data.eligible_amount);
+                if (data?.tenure) updateData.loan_tenure_months = parseInt(data.tenure);
                 nextStage = 'credit_check_2';
             }
             if (action === 'return') nextStage = 'customer_experience';
@@ -777,10 +818,12 @@ router.post('/loans/:id/action', async (req, res) => {
             }
 
             if (action === 'approve') {
-                if (!data?.eligible_amount) {
+                if (!data?.eligible_amount && !loan.eligible_amount) {
                     return res.status(400).json({ message: "Eligible amount is required for approval." });
                 }
-                updateData = { eligible_amount: parseFloat(data.eligible_amount) };
+                if (data?.eligible_amount) updateData.eligible_amount = parseFloat(data.eligible_amount);
+                if (data?.tenure) updateData.loan_tenure_months = parseInt(data.tenure);
+
                 nextStage = 'internal_audit';
             }
             if (action === 'return') nextStage = 'credit_check_1';
@@ -802,7 +845,7 @@ router.post('/loans/:id/action', async (req, res) => {
             }
             if (action === 'approve') {
                 nextStage = 'disbursed';
-                updateData = { ...updateData, status: 'approved' }; // Final status
+                updateData.status = 'approved'; // Final status
             }
             if (action === 'return') nextStage = 'internal_audit';
         }
@@ -829,21 +872,17 @@ router.post('/loans/:id/action', async (req, res) => {
                     WHERE id = ${id}
                 `;
             } else {
-                if (Object.keys(updateData).includes('eligible_amount')) {
-                    await sql`
-                        UPDATE loans 
-                        SET stage = ${nextStage}, eligible_amount = ${updateData['eligible_amount']}, updated_at = NOW() 
-                        ${updateData['status'] ? sql`, status = ${updateData['status']}` : sql``}
-                        WHERE id = ${id}
-                    `;
-                } else {
-                    await sql`
-                        UPDATE loans 
-                        SET stage = ${nextStage}, updated_at = NOW()
-                        ${updateData['status'] ? sql`, status = ${updateData['status']}` : sql``}
-                        WHERE id = ${id}
-                    `;
-                }
+                // Dynamic Update Query
+                await sql`
+                    UPDATE loans 
+                    SET 
+                        stage = ${nextStage}, 
+                        updated_at = NOW()
+                        ${updateData.eligible_amount ? sql`, eligible_amount = ${updateData.eligible_amount}` : sql``}
+                        ${updateData.loan_tenure_months ? sql`, loan_tenure_months = ${updateData.loan_tenure_months}` : sql``}
+                        ${updateData.status ? sql`, status = ${updateData.status}` : sql``}
+                    WHERE id = ${id}
+                `;
             }
 
             // --- LOG ACTIVITY ---
@@ -1053,7 +1092,7 @@ router.post('/loans/application', async (req, res) => {
         mda_tertiary, ippis_number, staff_id, average_monthly_income,
 
         // Loan
-        requested_loan_amount, loan_tenure_months,
+        requested_loan_amount, loan_tenure_months, loan_type,
 
         // Bank Details
         bank_name, account_number, account_name,
@@ -1116,7 +1155,7 @@ router.post('/loans/application', async (req, res) => {
                 bvn, nin,
                 state_of_origin, state_of_residence, residential_status, primary_home_address,
                 mda_tertiary, ippis_number, staff_id, average_monthly_income,
-                requested_loan_amount, loan_tenure_months,
+                requested_loan_amount, loan_tenure_months, loan_type,
                 bank_name, account_number, account_name,
                 govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
                 work_id_url, payslip_url,
@@ -1130,7 +1169,7 @@ router.post('/loans/application', async (req, res) => {
                 ${bvn || null}, ${nin || null},
                 ${state_of_origin || null}, ${state_of_residence || null}, ${residential_status || null}, ${primary_home_address || null},
                 ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${average_monthly_income || 0},
-                ${requested_loan_amount}, ${loan_tenure_months || 6},
+                ${requested_loan_amount}, ${loan_tenure_months || 6}, ${loan_type || 'new'},
                 ${bank_name || null}, ${account_number || null}, ${account_name || null},
                 ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
                 ${work_id_url || null}, ${payslip_url || null},
@@ -1150,6 +1189,165 @@ router.post('/loans/application', async (req, res) => {
 
     } catch (error) {
         console.error("Error creating loan application:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/loans/{id}/assign:
+ *   patch:
+ *     summary: Reassign a loan to another sales officer
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [sales_officer_id]
+ *     responses:
+ *       200:
+ *         description: Loan reassigned successfully
+ */
+router.patch('/loans/:id/assign', async (req, res) => {
+    const { id } = req.params;
+    const { sales_officer_id } = req.body;
+    // @ts-ignore
+    const user = req.user as any;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+    // Permission Check: Sales Manager, Admin, Super Admin
+    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin'];
+    if (!allowedRoles.includes(user.role)) {
+        return res.status(403).json({ message: "Only Managers and Admins can reassign loans." });
+    }
+
+    if (!sales_officer_id) {
+        return res.status(400).json({ message: "Target Sales Officer ID is required." });
+    }
+
+    try {
+        const [loan] = await sql`SELECT sales_officer_id FROM loans WHERE id = ${id}`;
+        if (!loan) return res.status(404).json({ message: "Loan not found" });
+
+        const [newOfficer] = await sql`SELECT id, email, full_name FROM customers WHERE id = ${sales_officer_id}`;
+        if (!newOfficer) return res.status(404).json({ message: "Target officer not found." });
+
+        if (loan.sales_officer_id === sales_officer_id) {
+            return res.json({ message: "Loan is already assigned to this officer." });
+        }
+
+        // Update Assignment
+        await sql`
+            UPDATE loans 
+            SET sales_officer_id = ${sales_officer_id}, updated_at = NOW()
+            WHERE id = ${id}
+        `;
+
+        // Log Activity
+        await sql`
+            INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+            VALUES (${id}, ${user.id}, 'reassign_officer', ${`Reassigned to ${newOfficer.full_name}`}, ${JSON.stringify({ from: loan.sales_officer_id, to: sales_officer_id, updatedBy: user.email })})
+        `;
+
+        // Notify New Officer
+        try {
+            await resendService.sendStageNotification([newOfficer.email], id, 'assigned');
+            console.log(`Notification sent to New Sales Officer (${newOfficer.email})`);
+        } catch (emailError) {
+            console.warn("Failed to send assignment email:", emailError);
+        }
+
+        res.json({ message: `Loan reassigned to ${newOfficer.full_name}` });
+
+    } catch (error) {
+        console.error("Error reassigning loan:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/loans/{id}/attribute:
+ *   patch:
+ *     summary: Update a specific attribute of a loan
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [field, value]
+ *             properties:
+ *               field:
+ *                 type: string
+ *                 enum: [loan_type]
+ *               value:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Attribute updated successfully
+ */
+router.patch('/loans/:id/attribute', async (req, res) => {
+    const { id } = req.params;
+    const { field, value } = req.body;
+    // @ts-ignore
+    const user = req.user as any;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+    // Allowed fields for partial update
+    const allowedFields = ['loan_type'];
+    if (!allowedFields.includes(field)) {
+        return res.status(400).json({ message: "Invalid field for partial update." });
+    }
+
+    try {
+        const [loan] = await sql`SELECT stage FROM loans WHERE id = ${id}`;
+        if (!loan) return res.status(404).json({ message: "Loan not found" });
+
+        // Permission Check: Sales Officer/Manager during 'sales' or 'submitted'
+        const canEdit = (
+            ['sales', 'submitted'].includes(loan.stage) &&
+            ['sales_officer', 'sales_manager', 'super_admin', 'superadmin'].includes(user.role)
+        );
+
+        if (!canEdit) {
+            return res.status(403).json({ message: "You cannot edit this field at this stage." });
+        }
+
+        // Update Field
+        await sql`
+            UPDATE loans 
+            SET ${sql(field)} = ${value}, updated_at = NOW()
+            WHERE id = ${id}
+        `;
+
+        // Log Activity
+        await sql`
+            INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+            VALUES (${id}, ${user.id}, 'update_attribute', ${`Updated ${field} to ${value}`}, ${JSON.stringify({ field, value, updatedBy: user.email })})
+        `;
+
+        res.json({ message: "Updated successfully" });
+
+    } catch (error) {
+        console.error(`Error updating ${field}:`, error);
         res.status(500).json({ message: "Internal server error" });
     }
 });

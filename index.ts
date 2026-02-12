@@ -61,7 +61,10 @@ import pg from 'pg';
 const PgSession = connectPgSimple(session);
 const pool = new pg.Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    max: 20, // Limit pool size to preventing hogging all connections
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
 });
 
 // Determine if we are in production
