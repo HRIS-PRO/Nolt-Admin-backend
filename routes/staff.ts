@@ -1042,7 +1042,7 @@ router.post('/loans/application', async (req, res) => {
 
     const {
         // Identity
-        title, product_type, surname, first_name, middle_name,
+        title, surname, first_name, middle_name,
         gender, date_of_birth, religion, marital_status,
         mothers_maiden_name, mobile_number, personal_email, bvn, nin,
 
@@ -1121,7 +1121,7 @@ router.post('/loans/application', async (req, res) => {
                 govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
                 work_id_url, payslip_url,
                 customer_references,
-                status, stage, product_type
+                status, stage
             ) VALUES (
                 ${customerId}, ${officer.id},
                 ${surname}, ${first_name}, ${middle_name || null}, ${applicant_full_name},
@@ -1135,7 +1135,7 @@ router.post('/loans/application', async (req, res) => {
                 ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
                 ${work_id_url || null}, ${payslip_url || null},
                 ${references ? sql.json(references) : null},
-                'pending', 'sales', ${product_type}
+                'pending', 'sales'
             )
             RETURNING id
         `;
