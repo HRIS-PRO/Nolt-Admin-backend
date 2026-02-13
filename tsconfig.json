@@ -8,5 +8,9 @@
         "strict": true,
         "skipLibCheck": true,
         "outDir": "./dist"
-    }
+    },
+    "exclude": [
+        "migrations",
+        "scripts"
+    ]
 }

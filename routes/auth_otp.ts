@@ -3,7 +3,7 @@ import { Router } from 'express';
 import * as otplib from 'otplib';
 const authenticator = (otplib as any).authenticator || (otplib as any).default?.authenticator;
 import qrcode from 'qrcode';
-import sql from '../config/db.js';
+import pool from '../config/db.js';
 
 const router = Router();
 
@@ -40,11 +40,10 @@ router.post('/generate', isAuthenticated, async (req, res) => {
         const secret = authenticator.generateSecret();
         const otpauth = authenticator.keyuri(user.email || 'User', 'Nolt Admin', secret);
 
-        await sql`
-            UPDATE customers 
-            SET otp_secret = ${secret}
-            WHERE id = ${user.id}
-`;
+        await pool.query(
+            'UPDATE customers SET otp_secret = $1 WHERE id = $2',
+            [secret, user.id]
+        );
 
         qrcode.toDataURL(otpauth, (err: any, imageUrl: any) => {
             if (err) {

@@ -229,5 +229,94 @@ export const resendService = {
             // Don't throw
             return { error: error.message };
         }
+    },
+
+    /**
+     * Sends a daily digest of loans pending finance approval.
+     * @param emails Array of finance/admin email addresses.
+     * @param loans Array of loan objects in the finance stage.
+     */
+    sendBulkFinanceDigest: async (
+        emails: string[],
+        loans: any[]
+    ): Promise<SendEmailTokenResponse> => {
+        if (!RESEND_API_KEY) {
+            console.warn("Missing Resend API Key, skipping finance digest.");
+            return { id: 'skipped-no-key' };
+        }
+
+        if (emails.length === 0 || loans.length === 0) {
+            return { id: 'skipped-no-recipients-or-loans' };
+        }
+
+        try {
+            const dashboardUrl = process.env.FRONTEND_URL || 'https://nolt-finance.vercel.app';
+            const financeQueueUrl = `${dashboardUrl}/staff/loans?stage=finance`; // Assuming query param works or they navigate
+
+            const loanRows = loans.map(loan => `
+                <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 12px;">${loan.id}</td>
+                    <td style="padding: 12px;">${loan.applicant_full_name}</td>
+                    <td style="padding: 12px;">${loan.amount_formatted || loan.requested_loan_amount}</td>
+                </tr>
+            `).join('');
+
+            const { data, error } = await resend.emails.send({
+                from: RESEND_FROM_EMAIL,
+                to: emails, // Changed from BCC to TO to satisfy types and simplicity
+                subject: `Daily Finance Digest: ${loans.length} Loans Pending Approval`,
+                html: `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <style>
+                            body { font-family: sans-serif; background-color: #f4f4f5; padding: 20px; }
+                            .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 24px; }
+                            h2 { color: #0f172a; }
+                            table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
+                            th { text-align: left; background-color: #f8fafc; padding: 12px; border-bottom: 2px solid #e2e8f0; }
+                            .button { display: inline-block; background-color: #2563eb; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h2>Finance Approval Pending</h2>
+                            <p>There are <strong>${loans.length}</strong> loan applications currently waiting in the Finance stage.</p>
+                            
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Applicant</th>
+                                        <th>Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${loanRows}
+                                </tbody>
+                            </table>
+
+                            <div style="text-align: center; margin-top: 24px;">
+                                <a href="${financeQueueUrl}" class="button">Process Loans</a>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                `,
+                text: `Daily Finance Digest: ${loans.length} Loans Pending Approval. Please view html version.`
+            });
+
+            if (error) {
+                console.error("Resend Finance Digest Error:", error);
+                return { error };
+            }
+
+            return data || { id: 'mock-id' };
+
+        } catch (error: any) {
+            console.error("Resend Service Error (Digest):", error);
+            return { error: error.message };
+        }
     }
 };

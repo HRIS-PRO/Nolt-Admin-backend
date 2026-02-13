@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import sql from '../config/db.js';
+import pool from '../config/db.js';
 
 const router = Router();
 
@@ -27,19 +27,16 @@ const router = Router();
 router.get('/dashboard', async (req, res) => {
     try {
         // Fetch Total Loans
-        const totalLoansResult = await sql`SELECT COUNT(*)::int as count FROM loans`;
-        const totalLoans = totalLoansResult[0].count;
+        const totalLoansResult = await pool.query('SELECT COUNT(*)::int as count FROM loans');
+        const totalLoans = totalLoansResult.rows[0].count;
 
-        // Fetch Total Users (Customers + Staff/Admins, or just Customers based on requirement. Usually users implies all or just customers. Let's assume customers for "Active Users" context usually)
-        // Adjusting query to count customers specifically as per most dashboards, or all users. The dashboard card says "Active Users". 
-        // Let's count all entries in 'customers' table for now, or filter by is_active if available.
-        // User requested "total number of users from the database".
-        const totalUsersResult = await sql`SELECT COUNT(*)::int as count FROM customers`;
-        const totalUsers = totalUsersResult[0].count;
+        // Fetch Total Users
+        const totalUsersResult = await pool.query('SELECT COUNT(*)::int as count FROM customers');
+        const totalUsers = totalUsersResult.rows[0].count;
 
         // Fetch Pending Loans
-        const pendingLoansResult = await sql`SELECT COUNT(*)::int as count FROM loans WHERE status = 'pending'`;
-        const pendingLoans = pendingLoansResult[0].count;
+        const pendingLoansResult = await pool.query("SELECT COUNT(*)::int as count FROM loans WHERE status = 'pending'");
+        const pendingLoans = pendingLoansResult.rows[0].count;
 
         res.json({
             totalLoans,

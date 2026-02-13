@@ -56,16 +56,10 @@ declare module 'express-session' {
 app.set('trust proxy', 1);
 
 import connectPgSimple from 'connect-pg-simple';
-import pg from 'pg';
+import pool from './config/db.js'; // Use shared pool
 
 const PgSession = connectPgSimple(session);
-const pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    max: 5, // Reduced to prevent connection exhaustion
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-});
+// Pool is now imported from config/db.ts
 
 // Determine if we are in production
 const isProduction = process.env.NODE_ENV === 'production' ||
@@ -165,7 +159,12 @@ app.post('/test/email', async (req, res) => {
     }
 });
 
+import { startCronJobs } from './services/cronService.js';
+
 app.listen(port, () => {
+    // Start Cron Jobs
+    startCronJobs();
+
     // Re-calculate simply for logging or move variable scope up if needed, but here simple calc is fine
     const isProdForLog = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
     console.log(`Server is running at http://localhost:${port}`);

@@ -2,7 +2,7 @@ import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as LocalStrategy } from 'passport-local';
 import bcrypt from 'bcrypt';
-import sql from './db.js';
+import pool from './db.js';
 
 interface Customer {
     id: number;
@@ -24,13 +24,13 @@ passport.use(new LocalStrategy({
     passwordField: 'password'
 }, async (email, password, done) => {
     try {
-        const users = await sql<Customer[]>`SELECT * FROM customers WHERE email = ${email} LIMIT 1`;
+        const result = await pool.query('SELECT * FROM customers WHERE email = $1 LIMIT 1', [email]);
 
-        if (users.length === 0) {
+        if (result.rows.length === 0) {
             return done(null, false, { message: 'Incorrect email.' });
         }
 
-        const user = users[0];
+        const user = result.rows[0];
 
         if (!user.password_hash) {
             return done(null, false, { message: 'Please login with Google.' });
@@ -55,7 +55,6 @@ passport.use(new LocalStrategy({
 passport.use(new GoogleStrategy({
     clientID: process.env.CLIENT_ID || '',
     clientSecret: process.env.CLIENT_SECRET || '',
-    // CRITICAL: Must point to the FRONTEND (Proxy) URL so the cookie is set on the frontend domain
     callbackURL: process.env.GOOGLE_CALLBACK_URL || "https://nolt-finance.vercel.app/auth/google/callback"
 },
     async (accessToken, refreshToken, profile, cb) => {
@@ -70,21 +69,23 @@ passport.use(new GoogleStrategy({
             }
 
             // Check if customer exists
-            const existingCustomers = await sql<Customer[]>`
-            SELECT * FROM customers WHERE google_id = ${googleId} OR email = ${email} LIMIT 1
-        `;
+            const existingUserResult = await pool.query(
+                'SELECT * FROM customers WHERE google_id = $1 OR email = $2 LIMIT 1',
+                [googleId, email]
+            );
 
-            if (existingCustomers.length > 0) {
+            if (existingUserResult.rows.length > 0) {
                 // User exists
-                return cb(null, existingCustomers[0]);
+                return cb(null, existingUserResult.rows[0]);
             } else {
                 // Create new customer
-                const newCustomers = await sql<Customer[]>`
-                INSERT INTO customers (google_id, email, full_name, avatar_url, new_comer, role)
-                VALUES (${googleId}, ${email}, ${fullName}, ${avatarUrl}, ${true}, 'customer')
-                RETURNING *
-            `;
-                return cb(null, newCustomers[0]);
+                const newUserResult = await pool.query(
+                    `INSERT INTO customers (google_id, email, full_name, avatar_url, new_comer, role)
+                     VALUES ($1, $2, $3, $4, $5, 'customer')
+                     RETURNING *`,
+                    [googleId, email, fullName, avatarUrl, true] // new_comer = true
+                );
+                return cb(null, newUserResult.rows[0]);
             }
 
         } catch (err: any) {
@@ -94,25 +95,23 @@ passport.use(new GoogleStrategy({
 ));
 
 passport.serializeUser((user: any, done) => {
-    console.log("DEBUG: serializeUser", user.id);
+    // console.log("DEBUG: serializeUser", user.id);
     done(null, user.id);
 });
 
 passport.deserializeUser(async (id: number, done) => {
-    console.log(`DEBUG: deserializeUser called for ID: ${id}`);
+    // console.log(`DEBUG: deserializeUser called for ID: ${id}`);
     try {
-        const users = await sql<Customer[]>`SELECT * FROM customers WHERE id = ${id}`;
-        if (users.length > 0) {
-            console.log(`DEBUG: deserializeUser success for ID: ${id}`);
-            done(null, users[0]);
+        const result = await pool.query('SELECT * FROM customers WHERE id = $1', [id]);
+        if (result.rows.length > 0) {
+            // console.log(`DEBUG: deserializeUser success for ID: ${id}`);
+            done(null, result.rows[0]);
         } else {
-            console.log(`DEBUG: deserializeUser - user not found for ID: ${id}`);
-            // If user is removed from DB but session exists, we should probably invalid the session, 
-            // but for now just return null/false user
+            // console.log(`DEBUG: deserializeUser - user not found for ID: ${id}`);
             done(null, false);
         }
     } catch (err) {
-        console.error(`DEBUG: deserializeUser/SQL error for ID: ${id}`, err);
+        // console.error(`DEBUG: deserializeUser/SQL error for ID: ${id}`, err);
         done(err, null);
     }
 });

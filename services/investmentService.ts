@@ -1,5 +1,5 @@
 
-import sql from '../config/db.js';
+import pool from '../config/db.js';
 
 interface CorporateInvestmentPayload {
     investment_type: 'NOLT_RISE' | 'NOLT_VAULT';
@@ -46,8 +46,8 @@ export const investmentService = {
             throw new Error("Minimum investment tenure is 90 days.");
         }
 
-        const newInvestment = await sql`
-            INSERT INTO investments (
+        const newInvestmentResult = await pool.query(
+            `INSERT INTO investments (
                 customer_id, investment_type,
                 company_name, company_address, date_of_incorporation, directors_are_pep,
                 rep_full_name, rep_phone_number, rep_bvn, rep_nin, 
@@ -59,30 +59,41 @@ export const investmentService = {
                 signatures,
                 status
             ) VALUES (
-                ${customerId}, ${data.investment_type},
-                ${data.company_name}, ${data.company_address}, ${data.date_of_incorporation}, ${data.directors_are_pep},
-                ${data.rep_full_name}, ${data.rep_phone_number}, ${data.rep_bvn}, ${data.rep_nin},
-                ${data.rep_state_of_origin}, ${data.rep_state_of_residence}, ${data.rep_house_number}, ${data.rep_street_address},
-                ${data.investment_amount}, ${data.tenure_days}, ${data.currency},
-                ${data.cac_url}, ${data.director_1_id_url || null}, ${data.director_2_id_url || null}, ${data.rep_selfie_url}, ${data.rep_id_url},
-                ${data.memart_url || null}, ${data.annual_returns_url || null}, ${data.board_resolution_url || null}, ${data.aml_cft_url || null},
-                ${data.payment_receipt_url},
-                ${data.signatures},
+                $1, $2,
+                $3, $4, $5, $6,
+                $7, $8, $9, $10,
+                $11, $12, $13, $14,
+                $15, $16, $17,
+                $18, $19, $20, $21, $22,
+                $23, $24, $25, $26,
+                $27,
+                $28,
                 'pending'
             )
-            RETURNING *
-        `;
+            RETURNING *`,
+            [
+                customerId, data.investment_type,
+                data.company_name, data.company_address, data.date_of_incorporation, data.directors_are_pep,
+                data.rep_full_name, data.rep_phone_number, data.rep_bvn, data.rep_nin,
+                data.rep_state_of_origin, data.rep_state_of_residence, data.rep_house_number, data.rep_street_address,
+                data.investment_amount, data.tenure_days, data.currency,
+                data.cac_url, data.director_1_id_url || null, data.director_2_id_url || null, data.rep_selfie_url, data.rep_id_url,
+                data.memart_url || null, data.annual_returns_url || null, data.board_resolution_url || null, data.aml_cft_url || null,
+                data.payment_receipt_url,
+                JSON.stringify(data.signatures)
+            ]
+        );
 
-        return newInvestment[0];
+        return newInvestmentResult.rows[0];
     },
 
     getInvestmentById: async (id: number) => {
-        const result = await sql`SELECT * FROM investments WHERE id = ${id}`;
-        return result[0];
+        const result = await pool.query('SELECT * FROM investments WHERE id = $1', [id]);
+        return result.rows[0];
     },
 
     getUserInvestments: async (customerId: number) => {
-        const result = await sql`SELECT * FROM investments WHERE customer_id = ${customerId} ORDER BY created_at DESC`;
-        return result;
+        const result = await pool.query('SELECT * FROM investments WHERE customer_id = $1 ORDER BY created_at DESC', [customerId]);
+        return result.rows;
     }
 };

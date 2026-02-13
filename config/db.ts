@@ -1,4 +1,5 @@
-import postgres from 'postgres'
+import pg from 'pg';
+const { Pool } = pg;
 
 const connectionString = process.env.DATABASE_URL
 
@@ -6,10 +7,12 @@ if (!connectionString) {
     throw new Error('DATABASE_URL is not set in environment variables')
 }
 
-const sql = postgres(connectionString, {
-    max: 5, // Reduced to max 5 to share with session pool
-    idle_timeout: 30, // Idle connection timeout in seconds
-    connect_timeout: 10, // Connect timeout in seconds
-})
+const pool = new Pool({
+    connectionString,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    max: 20, // Shared pool for the entire application (Session + App)
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+});
 
-export default sql
+export default pool;

@@ -2,7 +2,7 @@
 import express from 'express';
 import multer from 'multer';
 import { uploadFile } from '../services/uploadService.js';
-import sql from '../config/db.js';
+import pool from '../config/db.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() }); // Store in memory for processing
@@ -86,44 +86,57 @@ router.post('/', upload.single('file'), async (req, res) => {
         // Record in Database
         let doc;
         if (contextType === 'loan') {
-            [doc] = await sql`
-                INSERT INTO loan_documents (
+            const docResult = await pool.query(
+                `INSERT INTO loan_documents (
                     loan_id, draft_id, document_type, file_url, file_path, 
                     file_name, mime_type, size_bytes, 
                     uploaded_by_user_id, is_staff_upload
                 ) VALUES (
-                    ${finalId}, ${finalDraftId}, ${document_type}, ${uploadResult.url}, ${uploadResult.path},
-                    ${file.originalname}, ${uploadResult.mimeType}, ${uploadResult.size},
-                    ${userId}, ${isStaff}
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8,
+                    $9, $10
                 )
-                RETURNING *
-            `;
+                RETURNING *`,
+                [
+                    finalId, finalDraftId, document_type, uploadResult.url, uploadResult.path,
+                    file.originalname, uploadResult.mimeType, uploadResult.size,
+                    userId, isStaff
+                ]
+            );
+            doc = docResult.rows[0];
 
             // Log Activity if Staff
             if (isStaff && finalId) {
                 try {
-                    await sql`
-                        INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
-                        VALUES (${finalId}, ${userId}, 'document_upload', ${`Uploaded document: ${document_type}`}, ${JSON.stringify({ file_name: file.originalname, file_url: uploadResult.url })})
-                    `;
+                    await pool.query(
+                        `INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+                         VALUES ($1, $2, 'document_upload', $3, $4)`,
+                        [finalId, userId, `Uploaded document: ${document_type}`, JSON.stringify({ file_name: file.originalname, file_url: uploadResult.url })]
+                    );
                 } catch (logError) {
                     console.error("Failed to log activity for upload:", logError);
                 }
             }
         } else {
             // Investment Documents
-            [doc] = await sql`
-                INSERT INTO investment_documents (
+            const docResult = await pool.query(
+                `INSERT INTO investment_documents (
                     investment_id, draft_id, document_type, file_url, file_path, 
                     file_name, mime_type, size_bytes, 
                     uploaded_by_user_id, is_staff_upload
                 ) VALUES (
-                    ${finalId}, ${finalDraftId}, ${document_type}, ${uploadResult.url}, ${uploadResult.path},
-                    ${file.originalname}, ${uploadResult.mimeType}, ${uploadResult.size},
-                    ${userId}, ${isStaff}
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8,
+                    $9, $10
                 )
-                RETURNING *
-            `;
+                RETURNING *`,
+                [
+                    finalId, finalDraftId, document_type, uploadResult.url, uploadResult.path,
+                    file.originalname, uploadResult.mimeType, uploadResult.size,
+                    userId, isStaff
+                ]
+            );
+            doc = docResult.rows[0];
         }
 
         res.status(201).json({

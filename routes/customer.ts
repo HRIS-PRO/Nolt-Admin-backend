@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import pool from '../config/db.js';
+import { resendService } from '../services/resendService.js';
 
 const router = Router();
 
@@ -70,14 +72,12 @@ router.get('/me', async (req, res) => {
             const userId = req.user.id;
 
             // Fetch marketing data to see if referral code was used
-            const [marketingData] = await sql`
-                SELECT referral_code FROM marketing WHERE customer_id = ${userId}
-            `;
+            const marketingResult = await pool.query('SELECT referral_code FROM marketing WHERE customer_id = $1', [userId]);
+            const marketingData = marketingResult.rows[0];
 
             // Merge with user object
             // @ts-ignore
             const userResponse = { ...req.user, referral_code_used: marketingData?.referral_code || null };
-
             console.log("DEBUG: /api/me called. Response:", userResponse);
             res.json(userResponse);
         } catch (error) {
@@ -88,9 +88,6 @@ router.get('/me', async (req, res) => {
         res.status(401).json({ message: "Unauthorized" });
     }
 });
-
-import sql from '../config/db.js';
-import { resendService } from '../services/resendService.js';
 
 /**
  * @swagger
@@ -113,16 +110,11 @@ router.put('/onboarding-complete', async (req, res) => {
         try {
             // @ts-ignore
             const userId = req.user.id;
-            await sql`
-            UPDATE customers
-            SET new_comer = false
-            WHERE id = ${userId}
-          `;
+            await pool.query('UPDATE customers SET new_comer = false WHERE id = $1', [userId]);
 
             // Update the session user object manually if needed, or rely on next fetch
             // @ts-ignore
             req.user.new_comer = false;
-
             res.json({ message: "Onboarding completed" });
         } catch (error) {
             console.error("Error updating onboarding status:", error);
@@ -169,9 +161,8 @@ router.put('/onboarding-complete', async (req, res) => {
 router.get('/referral/:code', async (req, res) => {
     try {
         const { code } = req.params;
-        const [user] = await sql`
-            SELECT id, full_name, avatar_url FROM customers WHERE referral_code = ${code}
-        `;
+        const userResult = await pool.query('SELECT id, full_name, avatar_url FROM customers WHERE referral_code = $1', [code]);
+        const user = userResult.rows[0];
 
         if (user) {
             res.json(user);
@@ -221,16 +212,17 @@ router.post('/marketing', async (req, res) => {
         cookies: req.headers.cookie,
         session: req.session
     });
+
     if (req.isAuthenticated()) {
         try {
             const { hear_about_us, referral_code, officer_name } = req.body;
             // @ts-ignore
             const customerId = req.user.id;
 
-            await sql`
-                INSERT INTO marketing (customer_id, hear_about_us, referral_code, officer_name)
-                VALUES (${customerId}, ${hear_about_us}, ${referral_code || null}, ${officer_name || null})
-            `;
+            await pool.query(
+                'INSERT INTO marketing (customer_id, hear_about_us, referral_code, officer_name) VALUES ($1, $2, $3, $4)',
+                [customerId, hear_about_us, referral_code || null, officer_name || null]
+            );
 
             res.status(201).json({ message: "Marketing data saved" });
         } catch (error) {
@@ -328,25 +320,15 @@ router.post('/loans', async (req, res) => {
                 // Identity
                 applying_for_others, relationship_to_applicant, title,
                 // Name parts
-                surname, first_name, middle_name,
-                is_politically_exposed, gender, date_of_birth, religion, marital_status,
-                mothers_maiden_name, mobile_number, personal_email, bvn, nin,
-
+                surname, first_name, middle_name, is_politically_exposed, gender, date_of_birth, religion, marital_status, mothers_maiden_name, mobile_number, personal_email, bvn, nin,
                 // Financials
-                state_of_origin, state_of_residence, primary_home_address, residential_status,
-                number_of_dependents, has_active_loans, average_monthly_income,
-
+                state_of_origin, state_of_residence, primary_home_address, residential_status, number_of_dependents, has_active_loans, average_monthly_income,
                 // Documents
-                govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
-                work_id_url, payslip_url,
-
+                govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url, work_id_url, payslip_url,
                 // References
                 references, // Should be an array of objects
-
                 // Loan Details
-                requested_loan_amount, loan_tenure_months, signatures,
-                mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount,
-                bank_name, account_number, account_name
+                requested_loan_amount, loan_tenure_months, signatures, mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount, bank_name, account_number, account_name
             } = req.body;
 
             // Validate Mandatory Fields
@@ -368,7 +350,8 @@ router.post('/loans', async (req, res) => {
             if (referral_code) {
                 // 1. Try to find officer by referral code
                 // Note: Referral code is unique in customers table
-                const [referrer] = await sql`SELECT id FROM customers WHERE referral_code = ${referral_code}`;
+                const referrerResult = await pool.query('SELECT id FROM customers WHERE referral_code = $1', [referral_code]);
+                const referrer = referrerResult.rows[0];
                 if (referrer) {
                     assignedOfficerId = referrer.id;
                 }
@@ -377,7 +360,8 @@ router.post('/loans', async (req, res) => {
             if (!assignedOfficerId) {
                 // 2. Round Robin / Random assignment to a Sales Officer
                 // Fetch all users with role 'sales_officer'
-                const officers = await sql`SELECT id FROM customers WHERE role = 'sales_officer'`;
+                const officersResult = await pool.query("SELECT id FROM customers WHERE role = 'sales_officer'");
+                const officers = officersResult.rows;
 
                 if (officers.length > 0) {
                     // Simple Random Assignment for now (acts as basic load balancing)
@@ -386,13 +370,14 @@ router.post('/loans', async (req, res) => {
                 } else {
                     // Fallback: Assign to Super Admin or leave null?
                     // Let's try to find a superadmin if no sales officer exists
-                    const [admin] = await sql`SELECT id FROM customers WHERE role = 'super_admin' OR role = 'superadmin' LIMIT 1`;
+                    const adminResult = await pool.query("SELECT id FROM customers WHERE role = 'super_admin' OR role = 'superadmin' LIMIT 1");
+                    const admin = adminResult.rows[0];
                     if (admin) assignedOfficerId = admin.id;
                 }
             }
 
-            const [loan] = await sql`
-                INSERT INTO loans (
+            const newLoanResult = await pool.query(
+                `INSERT INTO loans (
                     customer_id,
                     applying_for_others, relationship_to_applicant,
                     surname, first_name, middle_name, applicant_full_name,
@@ -410,30 +395,50 @@ router.post('/loans', async (req, res) => {
                     sales_officer_id,
                     loan_type
                 ) VALUES (
-                    ${customerId},
-                    ${applying_for_others || false}, ${relationship_to_applicant || null},
-                    ${surname}, ${first_name}, ${middle_name || null}, ${applicant_full_name},
-                    ${title || null},
-                    ${is_politically_exposed || false}, ${gender || null}, ${date_of_birth || null}, ${religion || null}, ${marital_status || null},
-                    ${mothers_maiden_name || null}, ${mobile_number || null}, ${personal_email || null}, ${bvn || null}, ${nin || null},
-                    ${state_of_origin || null}, ${state_of_residence || null}, ${primary_home_address || null}, ${residential_status || null},
-                    ${number_of_dependents || 0}, ${has_active_loans || false}, ${average_monthly_income || 0},
-                    ${govt_id_url || null}, ${statement_of_account_url || null}, ${proof_of_residence_url || null}, ${selfie_verification_url || null},
-                    ${work_id_url || null}, ${payslip_url || null},
-                    ${references ? sql.json(references) : null},
-                    ${requested_loan_amount || 0}, ${loan_tenure_months || 0}, ${signatures || null},
-                    ${mda_tertiary || null}, ${ippis_number || null}, ${staff_id || null}, ${referral_code || null}, ${eligible_amount || 0},
-                    ${bank_name || null}, ${account_number || null}, ${account_name || null},
-                    ${assignedOfficerId},
+                    $1,
+                    $2, $3,
+                    $4, $5, $6, $7,
+                    $8,
+                    $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17, $18,
+                    $19, $20, $21, $22,
+                    $23, $24, $25,
+                    $26, $27, $28, $29,
+                    $30, $31,
+                    $32,
+                    $33, $34, $35,
+                    $36, $37, $38, $39, $40,
+                    $41, $42, $43,
+                    $44,
                     'new'
                 )
-                RETURNING *
-            `;
+                RETURNING *`,
+                [
+                    customerId,
+                    applying_for_others || false, relationship_to_applicant || null,
+                    surname, first_name, middle_name || null, applicant_full_name,
+                    title || null,
+                    is_politically_exposed || false, gender || null, date_of_birth || null, religion || null, marital_status || null,
+                    mothers_maiden_name || null, mobile_number || null, personal_email || null, bvn || null, nin || null,
+                    state_of_origin || null, state_of_residence || null, primary_home_address || null, residential_status || null,
+                    number_of_dependents || 0, has_active_loans || false, average_monthly_income || 0,
+                    govt_id_url || null, statement_of_account_url || null, proof_of_residence_url || null, selfie_verification_url || null,
+                    work_id_url || null, payslip_url || null,
+                    references ? JSON.stringify(references) : null,
+                    requested_loan_amount || 0, loan_tenure_months || 0, signatures || null,
+                    mda_tertiary || null, ippis_number || null, staff_id || null, referral_code || null, eligible_amount || 0,
+                    bank_name || null, account_number || null, account_name || null,
+                    assignedOfficerId
+                ]
+            );
+
+            const loan = newLoanResult.rows[0];
 
             // Send Notification to Sales Officer
             if (assignedOfficerId) {
                 try {
-                    const [officer] = await sql`SELECT email, full_name, role FROM customers WHERE id = ${assignedOfficerId}`;
+                    const officerResult = await pool.query('SELECT email, full_name, role FROM customers WHERE id = $1', [assignedOfficerId]);
+                    const officer = officerResult.rows[0];
                     if (officer && officer.email) {
                         // Send notification about new loan in 'sales' stage
                         await resendService.sendStageNotification([officer.email], loan.id, 'sales');
@@ -445,6 +450,7 @@ router.post('/loans', async (req, res) => {
             }
 
             res.status(201).json({ message: "Loan application submitted successfully", loanId: loan.id });
+
         } catch (error) {
             console.error("Error submitting loan application:", error);
             res.status(500).json({ message: "Internal Server Error" });
@@ -488,12 +494,13 @@ router.get('/loans', async (req, res) => {
         try {
             // @ts-ignore
             const customerId = req.user.id;
-            const loans = await sql`
-                SELECT * FROM loans 
-                WHERE customer_id = ${customerId}
-                ORDER BY created_at DESC
-            `;
-            res.json(loans);
+            const loansResult = await pool.query(
+                `SELECT * FROM loans 
+                WHERE customer_id = $1
+                ORDER BY created_at DESC`,
+                [customerId]
+            );
+            res.json(loansResult.rows);
         } catch (error) {
             console.error("Error fetching customer loans:", error);
             res.status(500).json({ message: "Internal Server Error" });

@@ -1,12 +1,8 @@
 import { Router } from 'express';
 import passport from 'passport';
 import bcrypt from 'bcrypt';
-import sql from '../config/db.js';
+import pool from '../config/db.js';
 import { resendService } from '../services/resendService.js';
-
-// ... (in routes)
-
-
 
 const router = Router();
 
@@ -51,8 +47,8 @@ router.get('/google/callback',
                 return res.redirect(`${frontendUrl}/login?error=session_save_failed`);
             }
             console.log(`[Google Callback] Session Saved. ID: ${req.sessionID}. Redirecting to ${frontendUrl}/dashboard`);
-            console.log('[Google Callback] Cookie Settings:', req.session.cookie);
-            console.log('[Google Callback] Set-Cookie Header:', res.getHeaders()['set-cookie']);
+            // console.log('[Google Callback] Cookie Settings:', req.session.cookie);
+            // console.log('[Google Callback] Set-Cookie Header:', res.getHeaders()['set-cookie']);
             res.redirect(`${frontendUrl}/dashboard?login=success`);
         });
     }
@@ -94,11 +90,10 @@ router.post('/login', async (req, res, next) => {
             const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
             // Save OTP to DB
-            await sql`
-                UPDATE customers 
-                SET email_otp = ${otp}, email_otp_expires_at = ${expiresAt}
-                WHERE id = ${user.id}
-            `;
+            await pool.query(
+                'UPDATE customers SET email_otp = $1, email_otp_expires_at = $2 WHERE id = $3',
+                [otp, expiresAt, user.id]
+            );
 
             // Send OTP via Email
             await resendService.sendEmailToken(user.email, otp);
@@ -151,8 +146,8 @@ router.post('/register', async (req, res) => {
         }
 
         // Check if user exists
-        const existingUsers = await sql`SELECT id FROM customers WHERE email = ${email}`;
-        if (existingUsers.length > 0) {
+        const existingUsers = await pool.query('SELECT id FROM customers WHERE email = $1', [email]);
+        if (existingUsers.rows.length > 0) {
             return res.status(400).json({ message: "User already exists" });
         }
 
@@ -160,24 +155,24 @@ router.post('/register', async (req, res) => {
         const passwordHash = await bcrypt.hash(password, 10);
 
         // Create user
-        const newUsers = await sql`
-            INSERT INTO customers (email, password_hash, full_name, role, new_comer, is_active)
-            VALUES (${email}, ${passwordHash}, ${full_name}, 'customer', true, true)
-            RETURNING *
-        `;
+        const newUserResult = await pool.query(
+            `INSERT INTO customers (email, password_hash, full_name, role, new_comer, is_active)
+             VALUES ($1, $2, $3, 'customer', true, true)
+             RETURNING *`,
+            [email, passwordHash, full_name]
+        );
 
-        const user = newUsers[0];
+        const user = newUserResult.rows[0];
 
         // Generate OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
         // Save OTP (Update the just created user)
-        await sql`
-            UPDATE customers 
-            SET email_otp = ${otp}, email_otp_expires_at = ${expiresAt}
-            WHERE id = ${user.id}
-        `;
+        await pool.query(
+            'UPDATE customers SET email_otp = $1, email_otp_expires_at = $2 WHERE id = $3',
+            [otp, expiresAt, user.id]
+        );
 
         // Send OTP
         await resendService.sendEmailToken(email, otp);
@@ -230,33 +225,27 @@ router.post('/verify-email-otp', async (req, res, next) => {
         console.log(`Verifying OTP for ${email}. Input OTP: ${otp}`);
 
         // Find user with matching OTP and valid expiry
-        const users = await sql`
-            SELECT * FROM customers 
-            WHERE email = ${email} 
-            AND email_otp = ${otp} 
-            AND email_otp_expires_at > NOW()
-        `;
+        const usersResult = await pool.query(
+            `SELECT * FROM customers 
+             WHERE email = $1 
+             AND email_otp = $2 
+             AND email_otp_expires_at > NOW()`,
+            [email, otp]
+        );
 
-        if (users.length === 0) {
+        if (usersResult.rows.length === 0) {
             console.log(`OTP Verification Failed for ${email}. No matching user found (or expired).`);
-            // Check why it failed (for deeper debugging)
-            const userCheck = await sql`SELECT email_otp, email_otp_expires_at FROM customers WHERE email = ${email}`;
-            if (userCheck.length > 0) {
-                console.log(`DB State for ${email}:`, userCheck[0]);
-            }
             return res.status(400).json({ message: "Invalid or expired OTP" });
         }
 
-        const user = users[0];
+        const user = usersResult.rows[0];
 
         // Clear OTP
-        await sql`
-            UPDATE customers 
-            SET email_otp = NULL, email_otp_expires_at = NULL 
-            WHERE id = ${user.id}
-        `;
+        await pool.query(
+            'UPDATE customers SET email_otp = NULL, email_otp_expires_at = NULL WHERE id = $1',
+            [user.id]
+        );
 
-        // Log user in using Passport
         // Log user in using Passport
         req.logIn(user, (err) => {
             if (err) { return next(err); }
@@ -265,7 +254,6 @@ router.post('/verify-email-otp', async (req, res, next) => {
             req.session.save((err) => {
                 if (err) { return next(err); }
                 console.log(`OTP Login Successful for ${email}. Session ID: ${req.sessionID}`);
-                console.log('Session Cookie:', req.session.cookie);
                 return res.json({ message: "Login successful", user });
             });
         });
