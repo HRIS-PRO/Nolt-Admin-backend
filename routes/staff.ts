@@ -3,6 +3,7 @@ import pool from '../config/db.js';
 import { resendService } from '../services/resendService.js';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
+import { getIO } from '../socket.js';
 
 const router = Router();
 
@@ -664,6 +665,19 @@ router.put('/loans/:id', async (req, res) => {
             [id, user.id, JSON.stringify({ updatedBy: user.email })]
         );
 
+        // Real-time Update
+        try {
+            const io = getIO();
+            // Emit the updated loan data (fetching it again might be cleaner, but for now we signal the update)
+            io.emit('loan_updated', { id, stage: existingLoan.stage, status: 'unknown_update' });
+            // Better: just emit the ID so clients re-fetch or we fetch fresh data here to emit.
+            // For now, let's emit the ID and let clients refetch or assume attributes.
+            // Actually, let's emit a specific event payload.
+            io.emit('loan_updated', { id, type: 'edit', updatedBy: user.email });
+        } catch (error) {
+            console.error("Socket emit failed:", error);
+        }
+
         res.json({ message: "Loan application updated successfully" });
 
     } catch (error) {
@@ -1027,6 +1041,20 @@ router.post('/loans/:id/action', async (req, res) => {
             } catch (logError) {
                 console.error("Failed to log activity or send email:", logError);
                 // Non-blocking error
+            }
+
+            // Real-time Update
+            try {
+                const io = getIO();
+                io.emit('loan_updated', {
+                    id: Number(id),
+                    stage: nextStage || 'rejected',
+                    status: updateData.status || (action === 'reject' ? 'rejected' : 'approved'),
+                    updatedBy: user.email,
+                    timestamp: new Date()
+                });
+            } catch (e) {
+                console.error("Socket emit failed:", e);
             }
 
             return res.json({ message: action === 'reject' ? "Loan rejected" : `Loan moved to ${nextStage}`, stage: nextStage || 'rejected' });

@@ -161,7 +161,15 @@ app.post('/test/email', async (req, res) => {
 
 import { startCronJobs } from './services/cronService.js';
 
-app.listen(port, () => {
+import { createServer } from 'http';
+import { initSocket } from './socket.js';
+
+const httpServer = createServer(app);
+
+// Initialize Socket.io
+initSocket(httpServer);
+
+httpServer.listen(port, () => {
     // Start Cron Jobs
     startCronJobs();
 

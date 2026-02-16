@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import pool from '../config/db.js';
 import { resendService } from '../services/resendService.js';
+import { getIO } from '../socket.js';
 
 const router = Router();
 
@@ -447,6 +448,14 @@ router.post('/loans', async (req, res) => {
                 } catch (emailError) {
                     console.error("Failed to send submission notification:", emailError);
                 }
+            }
+
+            // Real-time Update
+            try {
+                const io = getIO();
+                io.emit('loan_new', loan);
+            } catch (socketError) {
+                console.error("Socket emit failed:", socketError);
             }
 
             res.status(201).json({ message: "Loan application submitted successfully", loanId: loan.id });

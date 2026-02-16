@@ -41,6 +41,7 @@
     "qrcode": "^1.5.4",
     "resend": "^6.9.1",
     "sharp": "^0.34.5",
+    "socket.io": "^4.8.1",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1"
   },
@@ -59,6 +60,7 @@
     "@types/passport-local": "^1.0.38",
     "@types/pg": "^8.16.0",
     "@types/qrcode": "^1.5.6",
+    "@types/socket.io": "^3.0.1",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "tsx": "^4.21.0",

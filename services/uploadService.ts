@@ -43,3 +43,14 @@ export const uploadFile = async (file: Express.Multer.File, path: string) => {
         size: buffer.length
     };
 };
+
+export const deleteFile = async (path: string) => {
+    const { data, error } = await supabase.storage
+        .from('Nolt Storage')
+        .remove([path]);
+
+    if (error) {
+        throw error;
+    }
+    return data;
+};

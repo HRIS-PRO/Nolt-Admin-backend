@@ -3,6 +3,7 @@ import express from 'express';
 import multer from 'multer';
 import { uploadFile } from '../services/uploadService.js';
 import pool from '../config/db.js';
+import { getIO } from '../socket.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() }); // Store in memory for processing
@@ -139,6 +140,18 @@ router.post('/', upload.single('file'), async (req, res) => {
             doc = docResult.rows[0];
         }
 
+        // Real-time Update
+        try {
+            const io = getIO();
+            io.emit('doc_uploaded', {
+                loanId: finalId,
+                doc,
+                uploadedBy: userId
+            });
+        } catch (e) {
+            console.error("Socket emit failed details:", e);
+        }
+
         res.status(201).json({
             message: "File uploaded successfully",
             document: doc
@@ -147,6 +160,103 @@ router.post('/', upload.single('file'), async (req, res) => {
     } catch (error: any) {
         console.error("Upload failed:", error);
         res.status(500).json({ message: "Internal Server Error", error: error.message });
+    }
+});
+
+/**
+ * @swagger
+ * /api/upload/{id}:
+ *   delete:
+ *     summary: Delete a document
+ *     tags: [Documents]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [loan_id]
+ *             properties:
+ *               loan_id:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Document deleted successfully
+ *       403:
+ *         description: Unauthorized
+ */
+router.delete('/:id', async (req, res) => {
+    const { id } = req.params;
+    const { loan_id } = req.body;
+
+    // @ts-ignore
+    const user = req.user as any;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+    // Permission: Admin, Super Admin, or Staff who uploaded it?
+    const isPowerful = ['sales_manager', 'admin', 'super_admin', 'superadmin', 'finance'].includes(user.role);
+
+    try {
+        // 1. Find Document
+        const result = await pool.query(
+            `SELECT * FROM loan_documents WHERE id = $1 AND loan_id = $2`,
+            [id, loan_id]
+        );
+        const doc = result.rows[0];
+
+        if (!doc) {
+            return res.status(404).json({ message: "Document not found." });
+        }
+
+        if (!isPowerful && doc.uploaded_by_user_id !== user.id) {
+            return res.status(403).json({ message: "You are not authorized to delete this document." });
+        }
+
+        // 2. Delete from Storage
+        if (doc.file_path) {
+            try {
+                // Dynamic import or require if not imported at top
+                const { deleteFile } = await import('../services/uploadService.js');
+                await deleteFile(doc.file_path);
+            } catch (storageError) {
+                console.error("Failed to delete from storage:", storageError);
+            }
+        }
+
+        // 3. Delete from DB
+        await pool.query('DELETE FROM loan_documents WHERE id = $1', [id]);
+
+        // 4. Log Activity
+        await pool.query(
+            `INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata)
+             VALUES ($1, $2, 'document_delete', $3, $4)`,
+            [loan_id, user.id, `Deleted document: ${doc.document_type}`, JSON.stringify({ file_name: doc.file_name })]
+        );
+
+        // 5. Real-time Update
+        try {
+            const io = getIO();
+            io.emit('doc_deleted', {
+                loanId: loan_id,
+                docId: id,
+                deletedBy: user.email
+            });
+        } catch (e) {
+            console.error("Socket emit failed:", e);
+        }
+
+        res.json({ message: "Document deleted successfully" });
+
+    } catch (error) {
+        console.error("Delete failed:", error);
+        res.status(500).json({ message: "Internal Server Error" });
     }
 });
 
