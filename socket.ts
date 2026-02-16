@@ -6,7 +6,14 @@ let io: Server;
 export const initSocket = (httpServer: HttpServer) => {
     io = new Server(httpServer, {
         cors: {
-            origin: "*", // Allow all for development/testing
+            origin: [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:3000",
+                "https://nolt-finance.vercel.app",
+                "https://lms.noltfinance.com",
+                process.env.FRONTEND_URL || "http://localhost:5173"
+            ],
             methods: ["GET", "POST", "PATCH", "DELETE"],
             credentials: true
         }
