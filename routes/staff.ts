@@ -268,6 +268,12 @@ router.get('/loans', async (req, res) => {
             values.push((req.user as any).id);
         }
 
+        // Restrict Finance Role to 'finance' stage
+        if ((req.user as any)?.role === 'finance') {
+            filters.push(`l.stage = $${paramIndex++}`);
+            values.push('finance');
+        }
+
         if (typeof search === 'string' && search) {
             const searchPattern = `%${search}%`;
             filters.push(`(
@@ -377,18 +383,113 @@ router.get('/loans/pending', async (req, res) => {
  */
 router.get('/users', async (req, res) => {
     try {
-        const users = await pool.query(`
-            SELECT 
+        const { role } = req.query;
+        let queryText = `
+            SELECT DISTINCT ON (c.id)
                 c.id, c.email, c.full_name, c.role, c.is_active, c.created_at, 
                 c.avatar_url, c.referral_code,
-                m.full_name as manager_name
+                m.full_name as manager_name,
+                l.mobile_number as phone_number,
+                l.state_of_residence,
+                l.mda_tertiary as employer,
+                l.bvn,
+                l.nin,
+                l.date_of_birth,
+                l.primary_home_address,
+                l.bank_name,
+                l.account_number,
+                l.account_name
             FROM customers c
             LEFT JOIN customers m ON c.manager_id = m.id
-            ORDER BY c.created_at DESC
-        `);
-        res.json(users.rows);
+            LEFT JOIN loans l ON c.id = l.customer_id
+        `;
+
+        const queryParams = [];
+        if (role) {
+            queryText += ` WHERE c.role = $1`;
+            queryParams.push(role);
+        }
+
+        queryText += ` ORDER BY c.id, l.created_at DESC`;
+
+        const users = await pool.query(queryText, queryParams);
+
+        // Re-sort by created_at DESC in Javascript since DISTINCT ON requires ORDER BY c.id first
+        const sortedUsers = users.rows.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        res.json(sortedUsers);
     } catch (error) {
         console.error("Error fetching users:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/customers/{id}:
+ *   get:
+ *     summary: Get detailed customer profile
+ *     tags: [Staff]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Customer details
+ */
+router.get('/customers/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Fetch User Basic Info + Latest Profile Data
+        const userResult = await pool.query(`
+            SELECT DISTINCT ON (c.id)
+                c.*,
+                l.mobile_number, l.state_of_residence, l.mda_tertiary as employer,
+                l.bvn, l.nin, l.date_of_birth, l.primary_home_address,
+                l.bank_name, l.account_number, l.account_name
+            FROM customers c
+            LEFT JOIN loans l ON c.id = l.customer_id
+            WHERE c.id = $1
+            ORDER BY c.id, l.created_at DESC
+        `, [id]);
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ message: "Customer not found" });
+        }
+
+        const user = userResult.rows[0];
+
+        // Fetch Loans
+        const loansResult = await pool.query(`
+            SELECT * FROM loans WHERE customer_id = $1 ORDER BY created_at DESC
+        `, [id]);
+
+        // Aggregate Documents from all loans (deduplicated by URL)
+        const documents: { type: string; url: string; date: string }[] = [];
+        const docTypes = ['govt_id_url', 'work_id_url', 'payslip_url', 'statement_of_account_url', 'proof_of_residence_url', 'selfie_verification_url'];
+        const seenUrls = new Set();
+
+        loansResult.rows.forEach((loan: any) => {
+            docTypes.forEach(type => {
+                if (loan[type] && !seenUrls.has(loan[type])) {
+                    seenUrls.add(loan[type]);
+                    documents.push({
+                        type: type.replace('_url', '').replace(/_/g, ' ').toUpperCase(),
+                        url: loan[type],
+                        date: loan.created_at
+                    });
+                }
+            });
+        });
+
+        res.json({
+            profile: user,
+            loans: loansResult.rows,
+            documents
+        });
+
+    } catch (error) {
+        console.error("Error fetching customer details:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -483,6 +584,10 @@ router.get('/loans/:id', async (req, res) => {
                 l.bank_name, l.account_number, l.loan_tenure_months, l.account_name, -- Added bank details
                 l.loan_type, -- Added loan type
                 
+                -- New Fields for TopUp/BuyOver
+                l.casa, l.topup_amount, l.buy_over_amount,
+                l.buy_over_company_name, l.buy_over_company_account_name, l.buy_over_company_account_number,
+
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -602,11 +707,48 @@ router.put('/loans/:id', async (req, res) => {
         govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
         work_id_url, payslip_url,
 
+        // New Fields
+        casa, topup_amount, buy_over_amount,
+        buy_over_company_name, buy_over_company_account_name, buy_over_company_account_number,
+
         // References
         references
     } = req.body;
 
     try {
+        // --- Validation Logic for Loan Types ---
+        if (loan_type && loan_type !== 'new') {
+            const missingFields: string[] = [];
+
+            // Common Requirements for TopUp, Re-App, BuyOver
+            if (['topup', 're-app', 'buy_over', 'add_on'].includes(loan_type)) {
+                if (!ippis_number) missingFields.push('IPPIS Number');
+                if (!mobile_number) missingFields.push('Mobile Number');
+                if (!casa) missingFields.push('CASA Turnover');
+                if (!payslip_url) missingFields.push('Recent Payslip');
+            }
+
+            // Specific to TopUp
+            if (loan_type === 'topup' || loan_type === 'add_on') {
+                if (!topup_amount) missingFields.push('TopUp Amount');
+            }
+
+            // Specific to Buy Over
+            if (loan_type === 'buy_over') {
+                if (!buy_over_amount) missingFields.push('Buy Over Amount');
+                if (!buy_over_company_name) missingFields.push('Buy Over Company Name');
+                if (!buy_over_company_account_name) missingFields.push('Buy Over Company Account Name');
+                if (!buy_over_company_account_number) missingFields.push('Buy Over Company Account Number');
+            }
+
+            if (missingFields.length > 0) {
+                return res.status(400).json({
+                    message: `Missing required fields for ${loan_type.replace('_', ' ').toUpperCase()}: ${missingFields.join(', ')}`
+                });
+            }
+        }
+        // ---------------------------------------
+
         const applicant_full_name = `${surname} ${first_name} ${middle_name || ''}`.trim();
 
         await pool.query(
@@ -625,8 +767,12 @@ router.put('/loans/:id', async (req, res) => {
                 proof_of_residence_url = $27, selfie_verification_url = $28,
                 work_id_url = $29, payslip_url = $30,
                 customer_references = $31,
+                
+                casa = $32, topup_amount = $33, buy_over_amount = $34,
+                buy_over_company_name = $35, buy_over_company_account_name = $36, buy_over_company_account_number = $37,
+
                 updated_at = NOW()
-            WHERE id = $32`,
+            WHERE id = $38`,
             [
                 surname, first_name, middle_name || null, applicant_full_name,
                 mobile_number, personal_email || null,
@@ -641,6 +787,10 @@ router.put('/loans/:id', async (req, res) => {
                 proof_of_residence_url || null, selfie_verification_url || null,
                 work_id_url || null, payslip_url || null,
                 references ? JSON.stringify(references) : null,
+
+                casa || 0, topup_amount || 0, buy_over_amount || 0,
+                buy_over_company_name || null, buy_over_company_account_name || null, buy_over_company_account_number || null,
+
                 id
             ]
         );
