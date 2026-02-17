@@ -286,6 +286,13 @@ router.get('/loans', async (req, res) => {
             paramIndex++;
         }
 
+
+        // Filter Special Loans logic REMOVED as per user request (Show all loans)
+        // const { include_special } = req.query;
+        // if (include_special !== 'true') {
+        //     filters.push(`(l.loan_type IS NULL OR l.loan_type NOT IN ('topup', 'buy_over', 're-app', 'add_on'))`);
+        // }
+
         const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
 
         // Main Query
@@ -763,9 +770,12 @@ router.put('/loans/:id', async (req, res) => {
                 residential_status = $17, primary_home_address = $18,
                 mda_tertiary = $19, ippis_number = $20, average_monthly_income = $21,
                 requested_loan_amount = $22, loan_tenure_months = $23, loan_type = $24,
-                govt_id_url = $25, statement_of_account_url = $26, 
-                proof_of_residence_url = $27, selfie_verification_url = $28,
-                work_id_url = $29, payslip_url = $30,
+                govt_id_url = COALESCE($25, govt_id_url), 
+                statement_of_account_url = COALESCE($26, statement_of_account_url), 
+                proof_of_residence_url = COALESCE($27, proof_of_residence_url), 
+                selfie_verification_url = COALESCE($28, selfie_verification_url),
+                work_id_url = COALESCE($29, work_id_url), 
+                payslip_url = COALESCE($30, payslip_url),
                 customer_references = $31,
                 
                 casa = $32, topup_amount = $33, buy_over_amount = $34,
@@ -788,7 +798,7 @@ router.put('/loans/:id', async (req, res) => {
                 work_id_url || null, payslip_url || null,
                 references ? JSON.stringify(references) : null,
 
-                casa || 0, topup_amount || 0, buy_over_amount || 0,
+                casa || null, topup_amount || 0, buy_over_amount || 0,
                 buy_over_company_name || null, buy_over_company_account_name || null, buy_over_company_account_number || null,
 
                 id
@@ -1339,13 +1349,22 @@ router.post('/loans/application', async (req, res) => {
     } = req.body;
 
     // Validate Mandatory Fields
-    if (!surname || !first_name || !mobile_number || !requested_loan_amount) {
+    if (!surname || !first_name || !mobile_number || (!requested_loan_amount && !req.body.topup_amount && !req.body.buy_over_amount)) {
         return res.status(400).json({ message: "Surname, First Name, Mobile, and Amount are required." });
     }
 
-    // Validate Mandatory Documents
-    if (!govt_id_url || !work_id_url || !payslip_url) {
-        return res.status(400).json({ message: "Govt ID, Work ID, and Payslip are mandatory." });
+    // Validate Mandatory Documents (Conditional)
+    const isSpecialLoan = ['topup', 'buy_over', 're-app', 'add_on'].includes(loan_type);
+
+    if (!isSpecialLoan) {
+        if (!govt_id_url || !work_id_url || !payslip_url) {
+            return res.status(400).json({ message: "Govt ID, Work ID, and Payslip are mandatory." });
+        }
+    } else {
+        // For special loans, only Payslip might be required (as per user request "recent payslip upload")
+        if (!payslip_url) {
+            return res.status(400).json({ message: "Recent Payslip is mandatory." });
+        }
     }
 
     try {
@@ -1392,7 +1411,9 @@ router.post('/loans/application', async (req, res) => {
                 govt_id_url, statement_of_account_url, proof_of_residence_url, selfie_verification_url,
                 work_id_url, payslip_url,
                 customer_references,
-                status, stage
+                status, stage,
+                casa, topup_amount, buy_over_amount,
+                buy_over_company_name, buy_over_company_account_name, buy_over_company_account_number
             ) VALUES (
                 $1, $2,
                 $3, $4, $5, $6,
@@ -1406,7 +1427,9 @@ router.post('/loans/application', async (req, res) => {
                 $31, $32, $33, $34,
                 $35, $36,
                 $37,
-                'pending', 'sales'
+                'pending', 'sales',
+                $38, $39, $40,
+                $41, $42, $43
             )
             RETURNING id`,
             [
@@ -1417,11 +1440,17 @@ router.post('/loans/application', async (req, res) => {
                 bvn || null, nin || null,
                 state_of_origin || null, state_of_residence || null, residential_status || null, primary_home_address || null,
                 mda_tertiary || null, ippis_number || null, staff_id || null, average_monthly_income || 0,
-                requested_loan_amount, loan_tenure_months || 6, loan_type || 'new',
+                requested_loan_amount || 0, loan_tenure_months || 6, loan_type || 'new',
                 bank_name || null, account_number || null, account_name || null,
                 govt_id_url || null, statement_of_account_url || null, proof_of_residence_url || null, selfie_verification_url || null,
                 work_id_url || null, payslip_url || null,
-                references ? JSON.stringify(references) : null
+                references ? JSON.stringify(references) : null,
+                req.body.casa || null,
+                req.body.topup_amount || 0,
+                req.body.buy_over_amount || 0,
+                req.body.buy_over_company_name || null,
+                req.body.buy_over_company_account_name || null,
+                req.body.buy_over_company_account_number || null
             ]
         );
         const loan = newLoanResult.rows[0];

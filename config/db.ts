@@ -9,7 +9,7 @@ if (!connectionString) {
 
 const pool = new Pool({
     connectionString,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    ssl: { rejectUnauthorized: false }, // Always use SSL for remote DBs (Railway/Neon)
     max: 20, // Shared pool for the entire application (Session + App)
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
