@@ -3,6 +3,7 @@ import passport from 'passport';
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 import { resendService } from '../services/resendService.js';
+import { randomBytes } from 'crypto';
 
 const router = Router();
 
@@ -240,6 +241,10 @@ router.post('/verify-email-otp', async (req, res, next) => {
 
         const user = usersResult.rows[0];
 
+        if (user.is_active === false) {
+            return res.status(403).json({ message: "Account is deactivated. Please contact support." });
+        }
+
         // Clear OTP
         await pool.query(
             'UPDATE customers SET email_otp = NULL, email_otp_expires_at = NULL WHERE id = $1',
@@ -282,6 +287,140 @@ router.get('/logout', (req, res, next) => {
         if (err) { return next(err); }
         res.redirect('http://localhost:3000');
     });
+});
+
+/**
+ * @swagger
+ * /auth/forgot-password:
+ *   post:
+ *     summary: Request password reset link
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Reset link sent
+ *       404:
+ *         description: User not found
+ */
+router.post('/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ message: "Email is required" });
+        }
+
+        // Find user
+        const userResult = await pool.query('SELECT * FROM customers WHERE email = $1 LIMIT 1', [email]);
+
+        if (userResult.rows.length === 0) {
+            // Security: Don't reveal if user exists or not, but for this app we might want to be helpful or consistent
+            // Let's return 404 as per existing pattern or 200 with generic message?
+            // Existing app returns 404/400 explicitly.
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        const user = userResult.rows[0];
+
+        // Generate Token
+        const resetToken = randomBytes(32).toString('hex');
+        const resetExpires = new Date(Date.now() + 3600000); // 1 hour
+
+        // Save Token
+        await pool.query(
+            'UPDATE customers SET reset_password_token = $1, reset_password_expires = $2 WHERE id = $3',
+            [resetToken, resetExpires, user.id]
+        );
+
+        // Send Email
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const resetLink = `${frontendUrl}/reset-password?token=${resetToken}&email=${email}`;
+
+        await resendService.sendPasswordResetEmail(email, resetLink);
+
+        res.json({ message: "Password reset link sent to email" });
+
+    } catch (error) {
+        console.error("Forgot Password Error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /auth/reset-password:
+ *   post:
+ *     summary: Reset password using token
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, email, password]
+ *             properties:
+ *               token:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *       400:
+ *         description: Invalid or expired token
+ */
+router.post('/reset-password', async (req, res) => {
+    try {
+        const { token, email, password } = req.body;
+
+        if (!token || !email || !password) {
+            return res.status(400).json({ message: "Token, email, and password are required" });
+        }
+
+        // Validate Token
+        const userResult = await pool.query(
+            `SELECT * FROM customers 
+             WHERE email = $1 
+             AND reset_password_token = $2 
+             AND reset_password_expires > NOW()`,
+            [email, token]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(400).json({ message: "Invalid or expired reset token" });
+        }
+
+        const user = userResult.rows[0];
+
+        // Hash New Password
+        const passwordHash = await bcrypt.hash(password, 10);
+
+        // Update Password and Clear Token
+        await pool.query(
+            `UPDATE customers 
+             SET password_hash = $1, reset_password_token = NULL, reset_password_expires = NULL 
+             WHERE id = $2`,
+            [passwordHash, user.id]
+        );
+
+        res.json({ message: "Password reset successfully. You can now login." });
+
+    } catch (error) {
+        console.error("Reset Password Error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
 });
 
 export default router;

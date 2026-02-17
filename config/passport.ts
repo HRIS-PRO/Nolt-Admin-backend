@@ -76,7 +76,16 @@ passport.use(new GoogleStrategy({
 
             if (existingUserResult.rows.length > 0) {
                 // User exists
-                return cb(null, existingUserResult.rows[0]);
+                const user = existingUserResult.rows[0];
+                if (user.is_active === false) {
+                    // Check if there is a way to pass error message to callback in Google Strategy
+                    // Usually cb(null, false, { message: ... }) works if passport-google-oauth20 supports it, 
+                    // but unlike local, the failure handling might be different.
+                    // However, passing false usually triggers failureRedirect. 
+                    // We might want to pass an error if we want to show a specific message, or handle it in the callback.
+                    return cb(null, false);
+                }
+                return cb(null, user);
             } else {
                 // Create new customer
                 const newUserResult = await pool.query(

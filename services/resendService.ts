@@ -318,5 +318,51 @@ export const resendService = {
             console.error("Resend Service Error (Digest):", error);
             return { error: error.message };
         }
+    },
+
+    /**
+     * Sends a password reset email
+     * @param emailAddress The recipient's email address
+     * @param resetLink The reset link
+     */
+    sendPasswordResetEmail: async (
+        emailAddress: string,
+        resetLink: string
+    ): Promise<SendEmailTokenResponse> => {
+        if (!RESEND_API_KEY) {
+            throw new Error("Missing Resend API Key");
+        }
+
+        try {
+            const { data, error } = await resend.emails.send({
+                from: RESEND_FROM_EMAIL,
+                to: [emailAddress],
+                subject: 'Reset Your Password - Nolt Finance',
+                html: `
+                    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2>Reset Your Password</h2>
+                        <p>You requested to reset your password. Click the link below to proceed:</p>
+                        
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="${resetLink}" style="background-color: #2563eb; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600;">Reset Password</a>
+                        </div>
+                        
+                        <p>This link will expire in 1 hour.</p>
+                        <p>If you didn't request this, please ignore this email.</p>
+                        <p style="font-size: 12px; color: #666;">Or copy and paste this link: ${resetLink}</p>
+                    </div>
+                `
+            });
+
+            if (error) {
+                console.error("Resend Password Reset Error:", error);
+                throw new Error(error.message);
+            }
+
+            return data || { id: 'mock-id' };
+        } catch (error: any) {
+            console.error("Resend Service Error (Password Reset):", error);
+            throw new Error(error.message || "Failed to send password reset email");
+        }
     }
 };

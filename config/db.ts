@@ -10,7 +10,7 @@ if (!connectionString) {
 const pool = new Pool({
     connectionString,
     ssl: { rejectUnauthorized: false }, // Always use SSL for remote DBs (Railway/Neon)
-    max: 20, // Shared pool for the entire application (Session + App)
+    max: 40, // Shared pool for the entire application (Session + App)
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
 });

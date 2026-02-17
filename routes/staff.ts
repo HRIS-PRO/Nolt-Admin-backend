@@ -2,7 +2,7 @@ import { Router } from 'express';
 import pool from '../config/db.js';
 import { resendService } from '../services/resendService.js';
 import bcrypt from 'bcrypt';
-import crypto from 'crypto';
+
 import { getIO } from '../socket.js';
 
 const router = Router();
