@@ -299,6 +299,7 @@ router.get('/loans', async (req, res) => {
         const loansQuery = `
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
+                l.loan_type, l.topup_amount, l.buy_over_amount,
                 c.full_name as officer_name, c.email as officer_email, l.sales_officer_id
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -361,6 +362,7 @@ router.get('/loans/pending', async (req, res) => {
         const query = `
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
+                l.loan_type, l.topup_amount, l.buy_over_amount,
                 c.full_name as officer_name, c.email as officer_email
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
