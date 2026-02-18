@@ -28,21 +28,12 @@ export const startCronJobs = () => {
                     .format(loan.eligible_amount || loan.requested_loan_amount)
             }));
 
-            // 2. Fetch Finance Team & Super Admins
-            const teamResult = await pool.query(
-                `SELECT email FROM customers 
-                 WHERE role IN ('finance', 'super_admin', 'superadmin', 'admin') 
-                 AND is_active = true`
-            );
-            const emails = teamResult.rows.map(row => row.email).filter(email => email);
+            // 2. Set Recipient (Hardcoded as requested)
+            const emails = ['finance@noltfinance.com', 'divineobinali9@gmail.com'];
 
-            if (emails.length > 0) {
-                // 3. Send Digest
-                await resendService.sendBulkFinanceDigest(emails, formattedLoans);
-                console.log(`Finance Digest sent to ${emails.length} recipients for ${loans.length} loans.`);
-            } else {
-                console.log('No finance/admin users found to email.');
-            }
+            // 3. Send Digest
+            await resendService.sendBulkFinanceDigest(emails, formattedLoans);
+            console.log(`Finance Digest sent to ${emails[0]} for ${loans.length} loans.`);
 
         } catch (error) {
             console.error('Error in Finance Digest Cron Job:', error);
@@ -51,5 +42,47 @@ export const startCronJobs = () => {
         timezone: "Africa/Lagos"
     });
 
-    console.log('Cron Jobs initialized (3:00 PM WAT Daily).');
+    // Schedule Rejected Loan Cleanup at Midnight (00:00 WAT)
+    cron.schedule('0 0 * * *', async () => {
+        console.log('Running Rejected Loan Cleanup Cron Job...');
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Find valid IDs first to ensure we target correctly
+            const findQuery = `
+                SELECT id FROM loans 
+                WHERE (status = 'rejected' OR stage = 'rejected') 
+                AND updated_at < NOW() - INTERVAL '1 day'
+                FOR UPDATE SKIP LOCKED
+            `;
+            const result = await client.query(findQuery);
+            const idsToDelete = result.rows.map(r => r.id);
+
+            if (idsToDelete.length > 0) {
+                // Delete related activities first (others cascade)
+                // Note: loan_documents and loan_comments cascade, but activities might not
+                await client.query('DELETE FROM loan_activities WHERE loan_id = ANY($1)', [idsToDelete]);
+
+                // Delete loans (will cascade to docs/comments)
+                await client.query('DELETE FROM loans WHERE id = ANY($1)', [idsToDelete]);
+
+                await client.query('COMMIT');
+                console.log(`Cleanup: Deleted ${idsToDelete.length} rejected loans older than 24 hours.`);
+            } else {
+                await client.query('COMMIT');
+                console.log('Cleanup: No old rejected loans found.');
+            }
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('Error in Rejected Loan Cleanup:', error);
+        } finally {
+            client.release();
+        }
+    }, {
+        timezone: "Africa/Lagos"
+    });
+
+    console.log('Cron Jobs initialized (3:00 PM WAT Digest, 00:00 WAT Cleanup).');
 };

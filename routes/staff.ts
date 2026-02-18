@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import pool from '../config/db.js';
 import { resendService } from '../services/resendService.js';
+import { exportService } from '../services/exportService.js';
 import bcrypt from 'bcrypt';
 
 import { getIO } from '../socket.js';
@@ -488,6 +489,145 @@ router.get('/users', async (req, res) => {
     } catch (error) {
         console.error("Error fetching users:", error);
         res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /staff/customers/export-zip:
+ *   get:
+ *     summary: Export customers as ZIP with PDF profiles
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: query
+ *         name: ids
+ *         schema:
+ *           type: string
+ *         description: Comma-separated list of customer IDs to export
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search term to filter export (if ids not provided)
+ *     responses:
+ *       200:
+ *         description: ZIP file download
+ */
+router.get('/customers/export-zip', async (req, res) => {
+    try {
+        const { ids, search } = req.query;
+
+        let query = `
+            SELECT 
+                c.id, c.full_name, c.email, c.role, c.is_active, c.created_at,
+                l.mobile_number as phone_number,
+                l.state_of_residence,
+                l.mda_tertiary as employer,
+                l.bvn,
+                l.nin,
+                l.date_of_birth,
+                l.primary_home_address,
+                l.bank_name,
+                l.account_number,
+                l.account_name,
+                l.govt_id_url,
+                l.statement_of_account_url,
+                l.proof_of_residence_url,
+                l.selfie_verification_url
+            FROM customers c
+            LEFT JOIN loans l ON c.id = l.customer_id
+            WHERE c.role = 'customer'
+        `;
+
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (ids && typeof ids === 'string') {
+            const idList = ids.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+            if (idList.length > 0) {
+                query += ` AND c.id = ANY($${paramIndex++})`;
+                params.push(idList);
+            }
+        } else if (search) {
+            query += ` AND (
+                c.full_name ILIKE $${paramIndex} OR 
+                c.email ILIKE $${paramIndex} OR
+                l.mobile_number ILIKE $${paramIndex}
+            )`;
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        // Distinct to avoid duplicates if multiple loans exist (though we join on customer_id, logic checks out for basic profile)
+        // Check duplication: one customer can have multiple loans. joining on loans l will multiply rows.
+        // We need distinct customers.
+        // But we want the *latest* loan details (address, bank etc) usually.
+        // We can use DISTINCT ON (c.id) and ORDER BY c.id, l.created_at DESC to get the latest.
+
+        query = `
+            SELECT DISTINCT ON (c.id) 
+                c.id, c.full_name, c.email, c.role, c.is_active, c.created_at,
+                l.mobile_number as phone_number,
+                l.state_of_residence,
+                l.mda_tertiary as employer,
+                l.bvn,
+                l.nin,
+                l.date_of_birth,
+                l.primary_home_address,
+                l.bank_name,
+                l.account_number,
+                l.account_name,
+                l.govt_id_url,
+                l.statement_of_account_url,
+                l.proof_of_residence_url,
+                l.selfie_verification_url
+            FROM customers c
+            LEFT JOIN loans l ON c.id = l.customer_id
+            WHERE c.role = 'customer'
+        `;
+
+        // Reset params for fresh query construction
+        params.length = 0;
+        paramIndex = 1;
+
+        // Re-inject filters to new query
+        if (ids && typeof ids === 'string') {
+            const idList = ids.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+            if (idList.length > 0) {
+                query += ` AND c.id = ANY($${paramIndex++})`;
+                params.push(idList);
+            }
+        } else if (search) {
+            query += ` AND (
+                c.full_name ILIKE $${paramIndex} OR 
+                c.email ILIKE $${paramIndex} OR
+                l.mobile_number ILIKE $${paramIndex}
+            )`;
+            params.push(`%${search}%`);
+        }
+
+        query += ` ORDER BY c.id, l.created_at DESC`;
+
+        const result = await pool.query(query, params);
+        const customers = result.rows;
+
+        if (customers.length === 0) {
+            return res.status(404).json({ message: "No customers found to export." });
+        }
+
+        // Set Headers for ZIP Download
+        const filename = `customers_export_${new Date().toISOString().split('T')[0]}.zip`;
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+        // Stream the ZIP
+        exportService.streamCustomersZip(res, customers);
+
+    } catch (error) {
+        console.error("Error exporting customers:", error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: "Internal server error during export." });
+        }
     }
 });
 

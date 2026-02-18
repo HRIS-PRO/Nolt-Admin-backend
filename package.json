@@ -22,6 +22,7 @@
   "homepage": "https://github.com/Divine-mercyx/Nolt-Admin-backend#readme",
   "dependencies": {
     "@supabase/supabase-js": "^2.94.0",
+    "archiver": "^7.0.1",
     "axios": "^1.13.4",
     "bcrypt": "^6.0.0",
     "connect-pg-simple": "^10.0.0",
@@ -36,6 +37,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-local": "^1.0.0",
+    "pdfkit": "^0.17.2",
     "pg": "^8.18.0",
     "postgres": "^3.4.8",
     "qrcode": "^1.5.4",
@@ -46,6 +48,7 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/bcrypt": "^6.0.0",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cookie-parser": "^1.4.10",
@@ -58,6 +61,7 @@
     "@types/passport": "^1.0.17",
     "@types/passport-google-oauth20": "^2.0.17",
     "@types/passport-local": "^1.0.38",
+    "@types/pdfkit": "^0.17.5",
     "@types/pg": "^8.16.0",
     "@types/qrcode": "^1.5.6",
     "@types/socket.io": "^3.0.1",
