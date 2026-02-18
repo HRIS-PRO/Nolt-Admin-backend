@@ -392,8 +392,47 @@ router.get('/loans/pending', async (req, res) => {
  */
 router.get('/users', async (req, res) => {
     try {
-        const { role } = req.query;
-        let queryText = `
+        const { role, exclude_role, page = 1, limit = 10, search = '' } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        let baseQuery = `
+            FROM customers c
+            LEFT JOIN customers m ON c.manager_id = m.id
+            LEFT JOIN loans l ON c.id = l.customer_id
+        `;
+
+        const filters: string[] = [];
+
+        if (role) {
+            filters.push(`c.role = $${paramIndex++}`);
+            params.push(role);
+        }
+
+        if (exclude_role) {
+            filters.push(`c.role != $${paramIndex++}`);
+            params.push(exclude_role);
+        }
+
+        if (search) {
+            filters.push(`(
+                c.full_name ILIKE $${paramIndex} OR 
+                c.email ILIKE $${paramIndex} OR
+                c.referral_code ILIKE $${paramIndex} OR
+                l.mobile_number ILIKE $${paramIndex}
+            )`);
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        if (filters.length > 0) {
+            baseQuery += ` WHERE ${filters.join(' AND ')}`;
+        }
+
+        const countQuery = `SELECT COUNT(DISTINCT c.id) as total ${baseQuery}`;
+        const usersQuery = `
             SELECT DISTINCT ON (c.id)
                 c.id, c.email, c.full_name, c.role, c.is_active, c.created_at, 
                 c.avatar_url, c.referral_code,
@@ -408,25 +447,44 @@ router.get('/users', async (req, res) => {
                 l.bank_name,
                 l.account_number,
                 l.account_name
-            FROM customers c
-            LEFT JOIN customers m ON c.manager_id = m.id
-            LEFT JOIN loans l ON c.id = l.customer_id
+            ${baseQuery}
+            ORDER BY c.id DESC, l.created_at DESC
+            LIMIT $${paramIndex++} OFFSET $${paramIndex++}
         `;
 
-        const queryParams = [];
-        if (role) {
-            queryText += ` WHERE c.role = $1`;
-            queryParams.push(role);
-        }
+        const queryParams = [...params, limit, offset];
+        const countParams = [...params];
 
-        queryText += ` ORDER BY c.id, l.created_at DESC`;
+        const [usersResult, countResult] = await Promise.all([
+            pool.query(usersQuery, queryParams),
+            pool.query(countQuery, countParams)
+        ]);
 
-        const users = await pool.query(queryText, queryParams);
+        // We still need to sort by created_at DESC roughly, but DISTINCT ON (c.id) forces ORDER BY c.id first.
+        // We can re-sort the page results in memory for better UX if needed, or rely on the query.
+        // The query orders by c.id, then l.created_at. This groups duplicates.
+        // To get a true "Created At DESC" list of users is tricky with DISTINCT ON if we also want one row per user.
+        // Better strategy: Subquery or Window function. 
+        // For now, let's keep the existing logic but apply pagination. 
+        // Note: The previous logic sorted in JS. With pagination, we must sort in SQL to get correct pages.
+        // However, standard `DISTINCT ON` usage in PG requires the ORDER BY to match the DISTINCT keys primarily.
 
-        // Re-sort by created_at DESC in Javascript since DISTINCT ON requires ORDER BY c.id first
-        const sortedUsers = users.rows.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        // Let's improve the query to simple select from customers and join the *latest* loan info if needed.
+        // But to minimize risk, I will stick to returning the users and let the client handle small sorting discrepancies, 
+        // OR essentially assume the ID order (chronological) is roughly acceptable, or sort by id DESC (newest users first).
 
-        res.json(sortedUsers);
+        // Let's change ORDER BY to `c.id DESC` to show newest users first? 
+        // Existing was: `ORDER BY c.id, l.created_at DESC`. 
+
+        // const sortedUsers = usersResult.rows.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        res.json({
+            users: usersResult.rows,
+            total: Number(countResult.rows[0].total),
+            page: Number(page),
+            limit: Number(limit)
+        });
+
     } catch (error) {
         console.error("Error fetching users:", error);
         res.status(500).json({ message: "Internal server error" });
@@ -1670,21 +1728,22 @@ router.patch('/loans/:id/attribute', async (req, res) => {
  */
 router.get('/reports', async (req, res) => {
     try {
-        const { status, startDate, endDate } = req.query;
+        const { status, stage, startDate, endDate, page = 1, limit = 10 } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
 
         // Build Filters
         const filters: string[] = [];
         const values: any[] = [];
         let paramIndex = 1;
 
-        // Status Filter: 'approved' maps to 'disbursed' stage or 'approved' status
-        if (status === 'approved') {
-            filters.push("(l.stage = 'disbursed' OR l.status = 'approved')");
-        } else if (status === 'rejected') {
-            filters.push("(l.stage = 'rejected' OR l.status = 'rejected')");
-        } else {
-            // Default: Show both approved and rejected
-            filters.push("(l.stage = 'disbursed' OR l.status = 'approved' OR l.stage = 'rejected' OR l.status = 'rejected')");
+        if (status && status !== 'all') {
+            filters.push(`l.status = $${paramIndex++}`);
+            values.push(status);
+        }
+
+        if (stage && stage !== 'all') {
+            filters.push(`l.stage = $${paramIndex++}`);
+            values.push(stage);
         }
 
         // Date Filters
@@ -1693,16 +1752,14 @@ router.get('/reports', async (req, res) => {
             values.push(startDate);
         }
         if (typeof endDate === 'string' && endDate) {
-            // Need to cast to date and add interval in query, or do it in JS. Doing it in query is safer for tz.
-            // Using logic from original: l.created_at <= ${endDate}::date + interval '1 day'
-            // We pass the string date, postgres handles casting if parameter is typed implicitly, or we cast.
             filters.push(`l.created_at <= $${paramIndex++}::date + interval '1 day'`);
             values.push(endDate);
         }
 
         const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
 
-        const reports = await pool.query(`
+        // Main Query with Pagination
+        const reportsQuery = `
             SELECT 
                 l.applicant_full_name,
                 l.mda_tertiary,
@@ -1726,9 +1783,31 @@ router.get('/reports', async (req, res) => {
             LEFT JOIN customers c ON l.sales_officer_id = c.id
             ${whereClause}
             ORDER BY l.created_at DESC
-        `, values);
+            LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+        `;
 
-        res.json(reports.rows);
+        const queryValues = [...values, limit, offset];
+
+        // Count Query
+        const countQuery = `
+            SELECT COUNT(l.id) as total
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
+            ${whereClause}
+        `;
+
+        const countValues = [...values];
+
+
+        const reportsResult = await pool.query(reportsQuery, queryValues);
+        const countResult = await pool.query(countQuery, countValues);
+
+        res.json({
+            reports: reportsResult.rows,
+            total: Number(countResult.rows[0].total),
+            page: Number(page),
+            limit: Number(limit)
+        });
     } catch (error) {
         console.error("Error fetching reports:", error);
         res.status(500).json({ message: "Internal server error" });
