@@ -1,18 +1,18 @@
 import pg from 'pg';
 const { Pool } = pg;
 
-const connectionString = process.env.DATABASE_URL
+const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-    throw new Error('DATABASE_URL is not set in environment variables')
+  throw new Error('DATABASE_URL is not set');
 }
 
 const pool = new Pool({
-    connectionString,
-    ssl: { rejectUnauthorized: false }, // Always use SSL for remote DBs (Railway/Neon)
-    max: 40, // Shared pool for the entire application (Session + App)
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+  connectionString,
+  ssl: { rejectUnauthorized: false },
+  max: 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
 export default pool;

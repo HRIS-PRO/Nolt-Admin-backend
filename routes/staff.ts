@@ -648,6 +648,8 @@ router.get('/loans/:id', async (req, res) => {
                 l.work_id_url, l.payslip_url, -- Added missing docs
                 l.customer_references, l.signatures, l.updated_at, l.eligible_amount, l.sales_officer_id,
                 l.bvn, l.nin, -- Unmasked for editing
+                l.apply_management_fee, l.apply_insurance_fee, l.disbursement_amount, -- Disbursement Logic
+                l.existing_loan_balance, -- Added for Top-Up/Add-On/Re-App
                 l.bank_name, l.account_number, l.loan_tenure_months, l.account_name, -- Added bank details
                 l.loan_type, -- Added loan type
                 
@@ -1045,7 +1047,7 @@ router.get('/loans/:id/comments', async (req, res) => {
  */
 router.post('/loans/:id/action', async (req, res) => {
     const { id } = req.params;
-    const { action, data, reason } = req.body;
+    const { action, data, reason } = req.body; // data may contain eligible_amount, tenure, target_stage, fees
     // @ts-ignore
     const user = req.user as any;
 
@@ -1073,7 +1075,9 @@ router.post('/loans/:id/action', async (req, res) => {
 
         const STAGE_ORDER = ['submitted', 'sales', 'customer_experience', 'credit_check_1', 'credit_check_2', 'internal_audit', 'finance', 'disbursed'];
         let nextStage = '';
-        let updateData: Record<string, any> = {};
+        const updates: string[] = ["stage = $1", "updated_at = NOW()"];
+        const values: any[] = [];
+        let paramIndex = 2; // Start at 2 because $1 is reserved for nextStage
 
         // Helper to validate return target
         const getReturnStage = (defaultReturn: string) => {
@@ -1120,8 +1124,31 @@ router.post('/loans/:id/action', async (req, res) => {
                 return res.status(403).json({ message: "Only Credit Officers can process Credit Check 1" });
             }
             if (action === 'approve') {
-                if (data?.eligible_amount) updateData.eligible_amount = parseFloat(data.eligible_amount);
-                if (data?.tenure) updateData.loan_tenure_months = parseInt(data.tenure);
+                if (data?.eligible_amount) {
+                    updates.push(`eligible_amount = $${paramIndex++}`);
+                    values.push(parseFloat(data.eligible_amount));
+                }
+                if (data?.tenure) {
+                    updates.push(`loan_tenure_months = $${paramIndex++}`);
+                    values.push(parseInt(data.tenure));
+                }
+                // Save Disbursement Logic
+                if (data.apply_management_fee !== undefined) {
+                    updates.push(`apply_management_fee = $${paramIndex++}`);
+                    values.push(data.apply_management_fee);
+                }
+                if (data.apply_insurance_fee !== undefined) {
+                    updates.push(`apply_insurance_fee = $${paramIndex++}`);
+                    values.push(data.apply_insurance_fee);
+                }
+                if (data.disbursement_amount !== undefined) {
+                    updates.push(`disbursement_amount = $${paramIndex++}`);
+                    values.push(data.disbursement_amount);
+                }
+                if (data.existing_loan_balance !== undefined) {
+                    updates.push(`existing_loan_balance = $${paramIndex++}`);
+                    values.push(parseFloat(data.existing_loan_balance));
+                }
                 nextStage = 'credit_check_2';
             }
             if (action === 'return') nextStage = getReturnStage('customer_experience');
@@ -1137,8 +1164,31 @@ router.post('/loans/:id/action', async (req, res) => {
                 if (!data?.eligible_amount && !loan.eligible_amount) {
                     return res.status(400).json({ message: "Eligible amount is required for approval." });
                 }
-                if (data?.eligible_amount) updateData.eligible_amount = parseFloat(data.eligible_amount);
-                if (data?.tenure) updateData.loan_tenure_months = parseInt(data.tenure);
+                if (data?.eligible_amount) {
+                    updates.push(`eligible_amount = $${paramIndex++}`);
+                    values.push(parseFloat(data.eligible_amount));
+                }
+                if (data?.tenure) {
+                    updates.push(`loan_tenure_months = $${paramIndex++}`);
+                    values.push(parseInt(data.tenure));
+                }
+                // Save Disbursement Logic
+                if (data.apply_management_fee !== undefined) {
+                    updates.push(`apply_management_fee = $${paramIndex++}`);
+                    values.push(data.apply_management_fee);
+                }
+                if (data.apply_insurance_fee !== undefined) {
+                    updates.push(`apply_insurance_fee = $${paramIndex++}`);
+                    values.push(data.apply_insurance_fee);
+                }
+                if (data.disbursement_amount !== undefined) {
+                    updates.push(`disbursement_amount = $${paramIndex++}`);
+                    values.push(data.disbursement_amount);
+                }
+                if (data.existing_loan_balance !== undefined) {
+                    updates.push(`existing_loan_balance = $${paramIndex++}`);
+                    values.push(parseFloat(data.existing_loan_balance));
+                }
 
                 nextStage = 'internal_audit';
             }
@@ -1161,7 +1211,8 @@ router.post('/loans/:id/action', async (req, res) => {
             }
             if (action === 'approve') {
                 nextStage = 'disbursed';
-                updateData.status = 'approved'; // Final status
+                updates.push(`status = $${paramIndex++}`); // Final status
+                values.push('approved');
             }
             if (action === 'return') nextStage = getReturnStage('internal_audit');
         }
@@ -1183,34 +1234,17 @@ router.post('/loans/:id/action', async (req, res) => {
             // --- PERFORM UPDATE ---
             if (action === 'reject') {
                 await pool.query(`
-                    UPDATE loans 
-                    SET status = 'rejected', stage = 'rejected', updated_at = NOW() 
+                    UPDATE loans
+                    SET status = 'rejected', stage = 'rejected', updated_at = NOW()
                     WHERE id = $1
                 `, [id]);
             } else {
-                // Dynamic Update Query
-                const updateFields: string[] = ["stage = $1", "updated_at = NOW()"];
-                const updateValues: any[] = [nextStage];
-                let paramIndex = 2; // $1 is nextStage
+                values.unshift(nextStage); // Add nextStage as the first value for $1
+                values.push(id); // Add id as the last value
 
-                if (updateData.eligible_amount) {
-                    updateFields.push(`eligible_amount = $${paramIndex++}`);
-                    updateValues.push(updateData.eligible_amount);
-                }
-                if (updateData.loan_tenure_months) {
-                    updateFields.push(`loan_tenure_months = $${paramIndex++}`);
-                    updateValues.push(updateData.loan_tenure_months);
-                }
-                if (updateData.status) {
-                    updateFields.push(`status = $${paramIndex++}`);
-                    updateValues.push(updateData.status);
-                }
+                const query = `UPDATE loans SET ${updates.join(', ')} WHERE id = $${paramIndex}`; // Use paramIndex for the ID
 
-                // Add ID as last parameter
-                updateValues.push(id);
-                const query = `UPDATE loans SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
-
-                await pool.query(query, updateValues);
+                await pool.query(query, values);
             }
 
             // --- LOG ACTIVITY ---
@@ -1226,7 +1260,7 @@ router.post('/loans/:id/action', async (req, res) => {
                      VALUES ($1, $2, $3, $4, $5)`,
                     [
                         id, user.id, action, activityDescription,
-                        JSON.stringify({ from: currentStage, to: nextStage || 'rejected', ...updateData })
+                        JSON.stringify({ from: currentStage, to: nextStage || 'rejected', ...data }) // Use data for metadata
                     ]
                 );
 
@@ -1269,7 +1303,7 @@ router.post('/loans/:id/action', async (req, res) => {
                 io.emit('loan_updated', {
                     id: Number(id),
                     stage: nextStage || 'rejected',
-                    status: updateData.status || (action === 'reject' ? 'rejected' : 'approved'),
+                    status: (action === 'reject' ? 'rejected' : 'approved'), // Status should be derived from action or nextStage
                     updatedBy: user.email,
                     timestamp: new Date()
                 });
@@ -1760,7 +1794,7 @@ router.get('/reports', async (req, res) => {
 
         // Main Query with Pagination
         const reportsQuery = `
-            SELECT 
+            SELECT
                 l.applicant_full_name,
                 l.mda_tertiary,
                 l.eligible_amount, -- Approved Amount
@@ -1776,9 +1810,9 @@ router.get('/reports', async (req, res) => {
                 l.ippis_number,
                 l.staff_id,
                 l.mobile_number,
-                l.created_at,
-                l.status,
-                l.stage
+                l.topup_amount, -- Added Field for Special Loans
+                l.disbursement_amount, -- Added Field
+                l.status, l.stage, l.created_at, l.updated_at
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
             ${whereClause}
