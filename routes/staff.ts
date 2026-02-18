@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import pool from '../config/db.js';
-import { resendService } from '../services/resendService.js';
+import { zeptoService as resendService, zeptoService } from '../services/zeptoService.js';
 import { exportService } from '../services/exportService.js';
 import bcrypt from 'bcrypt';
 
@@ -77,7 +77,7 @@ router.post('/invite', isSuperAdmin, async (req, res) => {
 
         // Send Email via Termii
         try {
-            await resendService.sendWelcomeEmail(email, full_name, tempPassword);
+            await zeptoService.sendWelcomeEmail(email, full_name, tempPassword);
         } catch (emailError) {
             console.error("Failed to send credential email:", emailError);
             // We don't rollback user creation, but we warn the admin
@@ -1427,7 +1427,7 @@ router.post('/loans/:id/action', async (req, res) => {
                     const officer = officerResult.rows[0];
                     if (officer && officer.email) {
                         const stageForEmail = action === 'reject' ? 'rejected' : nextStage;
-                        await resendService.sendStageNotification([officer.email], id, stageForEmail);
+                        await zeptoService.sendStageNotification([officer.email], id, stageForEmail);
                         console.log(`Notification sent to Assigned Sales Officer (${officer.email}) regarding ${stageForEmail}`);
                     }
                 }
@@ -1777,7 +1777,7 @@ router.patch('/loans/:id/assign', async (req, res) => {
 
         // Notify New Officer
         try {
-            await resendService.sendStageNotification([newOfficer.email], id, 'assigned');
+            await zeptoService.sendStageNotification([newOfficer.email], id, 'assigned');
             console.log(`Notification sent to New Sales Officer (${newOfficer.email})`);
         } catch (emailError) {
             console.warn("Failed to send assignment email:", emailError);
@@ -2075,9 +2075,9 @@ router.post('/loans/bulk-approve', async (req, res) => {
                             // Actually, sending email inside transaction loop might be slow.
                             // Let's collect emails and send after commit? 
                             // For now, simple implementation.
-                            // We can't use resendService directly inside transaction easily without holding connection.
+                            // We can't use emailService directly inside transaction easily without holding connection.
                             // Let's just fire and forget or await. Await is safer for flow control.
-                            await resendService.sendStageNotification([officer.email], loan.id, 'disbursed');
+                            await zeptoService.sendStageNotification([officer.email], loan.id, 'disbursed');
                         }
                     } catch (emailError) {
                         console.warn(`Failed to notify officer for loan ${loan.id}`, emailError);

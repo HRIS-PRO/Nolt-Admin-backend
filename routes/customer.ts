@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import pool from '../config/db.js';
-import { resendService } from '../services/resendService.js';
+import { zeptoService as resendService } from '../services/zeptoService.js';
 import { getIO } from '../socket.js';
 
 const router = Router();

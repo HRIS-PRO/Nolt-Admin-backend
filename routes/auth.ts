@@ -2,7 +2,7 @@ import { Router } from 'express';
 import passport from 'passport';
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
-import { resendService } from '../services/resendService.js';
+import { zeptoService as resendService } from '../services/zeptoService.js';
 import { randomBytes } from 'crypto';
 
 const router = Router();

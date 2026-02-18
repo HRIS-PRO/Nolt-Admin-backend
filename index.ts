@@ -138,7 +138,8 @@ app.use('/api', customerRoutes);
 import investmentRoutes from './routes/investment.js';
 app.use('/api/investments', investmentRoutes);
 
-import { resendService } from './services/resendService.js';
+import { zeptoService as resendService } from './services/zeptoService.js';
+
 app.post('/test/email', async (req, res) => {
     try {
         const { email, otp, message } = req.body;

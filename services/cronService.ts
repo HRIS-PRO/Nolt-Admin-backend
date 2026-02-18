@@ -1,7 +1,7 @@
 
 import cron from 'node-cron';
 import pool from '../config/db.js';
-import { resendService } from './resendService.js';
+import { zeptoService as resendService } from './zeptoService.js';
 
 export const startCronJobs = () => {
     // Schedule task to run at 3:00 PM WAT (Africa/Lagos) every day
