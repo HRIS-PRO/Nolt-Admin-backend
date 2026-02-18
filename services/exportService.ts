@@ -110,7 +110,7 @@ export const exportService = {
             doc.end();
 
             // Append PDF stream to the archive in the customer's folder
-            archive.append(doc, { name: `${folderName}/CustomerDetails.pdf` });
+            archive.append(doc as any, { name: `${folderName}/CustomerDetails.pdf` });
         });
 
         // finalize the archive (ie we are done appending files but streams have to finish yet)
