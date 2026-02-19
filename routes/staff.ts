@@ -300,7 +300,7 @@ router.get('/loans', async (req, res) => {
         const loansQuery = `
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
-                l.loan_type, l.topup_amount, l.buy_over_amount,
+                l.loan_type, l.topup_amount, l.buy_over_amount, l.disbursement_amount,
                 c.full_name as officer_name, c.email as officer_email, l.sales_officer_id
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -920,6 +920,9 @@ router.put('/loans/:id', async (req, res) => {
         casa, topup_amount, buy_over_amount,
         buy_over_company_name, buy_over_company_account_name, buy_over_company_account_number,
 
+        // Bank Details
+        bank_name, account_number, account_name,
+
         // References
         references
     } = req.body;
@@ -982,9 +985,10 @@ router.put('/loans/:id', async (req, res) => {
                 
                 casa = $32, topup_amount = $33, buy_over_amount = $34,
                 buy_over_company_name = $35, buy_over_company_account_name = $36, buy_over_company_account_number = $37,
+                bank_name = $38, account_number = $39, account_name = $40,
 
                 updated_at = NOW()
-            WHERE id = $38`,
+            WHERE id = $41`,
             [
                 surname, first_name, middle_name || null, applicant_full_name,
                 mobile_number, personal_email || null,
@@ -1002,6 +1006,7 @@ router.put('/loans/:id', async (req, res) => {
 
                 casa || null, topup_amount || 0, buy_over_amount || 0,
                 buy_over_company_name || null, buy_over_company_account_name || null, buy_over_company_account_number || null,
+                bank_name || null, account_number || null, account_name || null,
 
                 id
             ]
