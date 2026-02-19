@@ -1340,7 +1340,11 @@ router.post('/loans/:id/action', async (req, res) => {
             if (!canAct('internal_audit', 'internal_audit')) {
                 return res.status(403).json({ message: "Only Internal Audit can process this stage" });
             }
-            if (action === 'approve') nextStage = 'finance';
+            if (action === 'approve') {
+                nextStage = 'finance';
+                updates.push(`status = $${paramIndex++}`);
+                values.push('approved');
+            }
             if (action === 'return') nextStage = getReturnStage('credit_check_2');
         }
 
@@ -1352,7 +1356,7 @@ router.post('/loans/:id/action', async (req, res) => {
             if (action === 'approve') {
                 nextStage = 'disbursed';
                 updates.push(`status = $${paramIndex++}`); // Final status
-                values.push('approved');
+                values.push('disbursed');
             }
             if (action === 'return') nextStage = getReturnStage('internal_audit');
         }
