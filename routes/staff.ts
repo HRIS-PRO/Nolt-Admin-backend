@@ -1347,13 +1347,12 @@ router.post('/loans/:id/action', async (req, res) => {
             }
             if (action === 'approve') {
                 nextStage = 'finance';
-                updates.push(`status = $${paramIndex++}`);
-                values.push('approved');
+                // Status remains 'processing' until Finance approves/disburses as per new request
             }
             if (action === 'return') nextStage = getReturnStage('credit_check_2');
         }
 
-        // 5. Finance -> Disbursed
+        // 5. Finance -> Disbursed (Final Approval)
         else if (currentStage === 'finance') {
             if (!canAct('finance', 'finance')) {
                 return res.status(403).json({ message: "Only Finance can process this stage" });
@@ -1361,7 +1360,7 @@ router.post('/loans/:id/action', async (req, res) => {
             if (action === 'approve') {
                 nextStage = 'disbursed';
                 updates.push(`status = $${paramIndex++}`); // Final status
-                values.push('disbursed');
+                values.push('approved'); // Changed from 'disbursed' back to 'approved' as per request
             }
             if (action === 'return') nextStage = getReturnStage('internal_audit');
         }
