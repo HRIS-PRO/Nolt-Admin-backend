@@ -300,7 +300,7 @@ router.get('/loans', async (req, res) => {
         const loansQuery = `
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
-                l.loan_type, l.topup_amount, l.buy_over_amount, l.disbursement_amount,
+                l.loan_type, l.topup_amount, l.buy_over_amount, l.disbursement_amount, l.disb_date,
                 c.full_name as officer_name, c.email as officer_email, l.sales_officer_id
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -363,7 +363,7 @@ router.get('/loans/pending', async (req, res) => {
         const query = `
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
-                l.loan_type, l.topup_amount, l.buy_over_amount,
+                l.loan_type, l.topup_amount, l.buy_over_amount, l.disb_date,
                 c.full_name as officer_name, c.email as officer_email
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -796,6 +796,7 @@ router.get('/loans/:id', async (req, res) => {
                 -- New Fields for TopUp/BuyOver
                 l.casa, l.topup_amount, l.buy_over_amount,
                 l.buy_over_company_name, l.buy_over_company_account_name, l.buy_over_company_account_number,
+                l.disb_date,
 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
@@ -1348,6 +1349,7 @@ router.post('/loans/:id/action', async (req, res) => {
             if (action === 'approve') {
                 nextStage = 'finance';
                 // Status remains 'processing' until Finance approves/disburses as per new request
+                updates.push(`disb_date = CURRENT_TIMESTAMP`);
             }
             if (action === 'return') nextStage = getReturnStage('credit_check_2');
         }
@@ -1381,7 +1383,7 @@ router.post('/loans/:id/action', async (req, res) => {
         if (nextStage || action === 'reject') {
             // --- PERFORM UPDATE ---
             if (action === 'reject') {
-                await pool.query(`
+                await pool.query(`  
                     UPDATE loans
                     SET status = 'rejected', stage = 'rejected', updated_at = NOW()
                     WHERE id = $1
@@ -1960,6 +1962,7 @@ router.get('/reports', async (req, res) => {
                 l.mobile_number,
                 l.topup_amount, -- Added Field for Special Loans
                 l.disbursement_amount, -- Added Field
+                l.disb_date,
                 l.status, l.stage, l.created_at, l.updated_at
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
