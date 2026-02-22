@@ -10,8 +10,8 @@ const options = {
         },
         servers: [
             {
-                url: 'http://localhost:5000',
-                description: 'Development server',
+                url: 'https://nolt-admin-backend-production.up.railway.app',
+                description: 'Production server',
             },
         ],
         components: {
