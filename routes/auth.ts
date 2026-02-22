@@ -39,7 +39,7 @@ router.get('/google/callback',
     passport.authenticate('google', { failureRedirect: '/' }),
     (req, res) => {
         // Successful authentication, redirect to frontend
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = process.env.FRONTEND_URL || 'https://lms.noltfinance.com';
 
         // Explicitly save session before redirect to ensure cookie is set
         req.session.save((err) => {
