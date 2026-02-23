@@ -317,6 +317,34 @@ router.post('/loans', async (req, res) => {
         try {
             // @ts-ignore
             const customerId = req.user.id;
+            // --- Sanitize and Validate Input Fields Before Destructuring ---
+            const sanitizePayload = (payload: any) => {
+                const sanitized: any = {};
+                for (const [key, val] of Object.entries(payload)) {
+                    if (val === 'null' || val === 'undefined' || val === '' || val === null || val === undefined) {
+                        sanitized[key] = null;
+                    } else if (typeof val === 'string') {
+                        sanitized[key] = val.trim();
+                    } else {
+                        sanitized[key] = val;
+                    }
+                }
+                return sanitized;
+            };
+
+            req.body = sanitizePayload(req.body);
+
+            const numericFields = ['average_monthly_income', 'requested_loan_amount', 'loan_tenure_months', 'eligible_amount'];
+            for (const field of numericFields) {
+                if (req.body[field] !== null) {
+                    const num = Number(req.body[field]);
+                    if (isNaN(num)) {
+                        return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
+                    }
+                    req.body[field] = num;
+                }
+            }
+
             const {
                 // Identity
                 applying_for_others, relationship_to_applicant, title,
@@ -460,9 +488,12 @@ router.post('/loans', async (req, res) => {
 
             res.status(201).json({ message: "Loan application submitted successfully", loanId: loan.id });
 
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error submitting loan application:", error);
-            res.status(500).json({ message: "Internal Server Error" });
+            res.status(500).json({
+                message: "Error submitting loan application. Please check your inputs or try again.",
+                details: error.message
+            });
         }
     } else {
         res.status(401).json({ message: "Unauthorized" });

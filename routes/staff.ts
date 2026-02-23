@@ -898,6 +898,34 @@ router.put('/loans/:id', async (req, res) => {
         return res.status(403).json({ message: `Cannot edit application in ${existingLoan.stage} stage.` });
     }
 
+    // --- Sanitize and Validate Input Fields Before Destructuring ---
+    const sanitizePayload = (payload: any) => {
+        const sanitized: any = {};
+        for (const [key, val] of Object.entries(payload)) {
+            if (val === 'null' || val === 'undefined' || val === '' || val === null || val === undefined) {
+                sanitized[key] = null;
+            } else if (typeof val === 'string') {
+                sanitized[key] = val.trim();
+            } else {
+                sanitized[key] = val;
+            }
+        }
+        return sanitized;
+    };
+
+    req.body = sanitizePayload(req.body);
+
+    const numericFields = ['average_monthly_income', 'requested_loan_amount', 'loan_tenure_months', 'casa', 'topup_amount', 'buy_over_amount'];
+    for (const field of numericFields) {
+        if (req.body[field] !== null) {
+            const num = Number(req.body[field]);
+            if (isNaN(num)) {
+                return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
+            }
+            req.body[field] = num;
+        }
+    }
+
     const {
         // Identity
         title, surname, first_name, middle_name,
@@ -1048,9 +1076,12 @@ router.put('/loans/:id', async (req, res) => {
 
         res.json({ message: "Loan application updated successfully" });
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error updating loan:", error);
-        res.status(500).json({ message: "Internal server error" });
+        res.status(500).json({
+            message: "Error updating loan. Please check your inputs or try again.",
+            details: error.message
+        });
     }
 });
 
@@ -1193,11 +1224,28 @@ router.get('/loans/:id/comments', async (req, res) => {
  */
 router.post('/loans/:id/action', async (req, res) => {
     const { id } = req.params;
-    const { action, data, reason } = req.body; // data may contain eligible_amount, tenure, target_stage, fees
+    let { action, data, reason } = req.body; // data may contain eligible_amount, tenure, target_stage, fees
     // @ts-ignore
     const user = req.user as any;
 
     if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+    // --- Validate and Sanitize Numeric Data Fields ---
+    if (data && typeof data === 'object') {
+        const dataNumericFields = ['eligible_amount', 'tenure', 'disbursement_amount', 'existing_loan_balance'];
+        for (const field of dataNumericFields) {
+            if (data[field] !== undefined && data[field] !== null && data[field] !== '' && data[field] !== 'null') {
+                const num = Number(data[field]);
+                if (isNaN(num)) {
+                    return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
+                }
+                data[field] = num;
+            } else {
+                // If it's missing or intentionally null, delete it so it's undefined
+                delete data[field];
+            }
+        }
+    }
 
     try {
         const loanResult = await pool.query('SELECT * FROM loans WHERE id = $1 LIMIT 1', [id]);
@@ -1270,30 +1318,30 @@ router.post('/loans/:id/action', async (req, res) => {
                 return res.status(403).json({ message: "Only Credit Officers can process Credit Check 1" });
             }
             if (action === 'approve') {
-                if (data?.eligible_amount) {
+                if (data?.eligible_amount !== undefined) {
                     updates.push(`eligible_amount = $${paramIndex++}`);
-                    values.push(parseFloat(data.eligible_amount));
+                    values.push(data.eligible_amount);
                 }
-                if (data?.tenure) {
+                if (data?.tenure !== undefined) {
                     updates.push(`loan_tenure_months = $${paramIndex++}`);
-                    values.push(parseInt(data.tenure));
+                    values.push(data.tenure);
                 }
                 // Save Disbursement Logic
-                if (data.apply_management_fee !== undefined) {
+                if (data?.apply_management_fee !== undefined) {
                     updates.push(`apply_management_fee = $${paramIndex++}`);
                     values.push(data.apply_management_fee);
                 }
-                if (data.apply_insurance_fee !== undefined) {
+                if (data?.apply_insurance_fee !== undefined) {
                     updates.push(`apply_insurance_fee = $${paramIndex++}`);
                     values.push(data.apply_insurance_fee);
                 }
-                if (data.disbursement_amount !== undefined) {
+                if (data?.disbursement_amount !== undefined) {
                     updates.push(`disbursement_amount = $${paramIndex++}`);
                     values.push(data.disbursement_amount);
                 }
-                if (data.existing_loan_balance !== undefined) {
+                if (data?.existing_loan_balance !== undefined) {
                     updates.push(`existing_loan_balance = $${paramIndex++}`);
-                    values.push(parseFloat(data.existing_loan_balance));
+                    values.push(data.existing_loan_balance);
                 }
                 nextStage = 'credit_check_2';
             }
@@ -1307,33 +1355,33 @@ router.post('/loans/:id/action', async (req, res) => {
             }
 
             if (action === 'approve') {
-                if (!data?.eligible_amount && !loan.eligible_amount) {
+                if (data?.eligible_amount === undefined && !loan.eligible_amount) {
                     return res.status(400).json({ message: "Eligible amount is required for approval." });
                 }
-                if (data?.eligible_amount) {
+                if (data?.eligible_amount !== undefined) {
                     updates.push(`eligible_amount = $${paramIndex++}`);
-                    values.push(parseFloat(data.eligible_amount));
+                    values.push(data.eligible_amount);
                 }
-                if (data?.tenure) {
+                if (data?.tenure !== undefined) {
                     updates.push(`loan_tenure_months = $${paramIndex++}`);
-                    values.push(parseInt(data.tenure));
+                    values.push(data.tenure);
                 }
                 // Save Disbursement Logic
-                if (data.apply_management_fee !== undefined) {
+                if (data?.apply_management_fee !== undefined) {
                     updates.push(`apply_management_fee = $${paramIndex++}`);
                     values.push(data.apply_management_fee);
                 }
-                if (data.apply_insurance_fee !== undefined) {
+                if (data?.apply_insurance_fee !== undefined) {
                     updates.push(`apply_insurance_fee = $${paramIndex++}`);
                     values.push(data.apply_insurance_fee);
                 }
-                if (data.disbursement_amount !== undefined) {
+                if (data?.disbursement_amount !== undefined) {
                     updates.push(`disbursement_amount = $${paramIndex++}`);
                     values.push(data.disbursement_amount);
                 }
-                if (data.existing_loan_balance !== undefined) {
+                if (data?.existing_loan_balance !== undefined) {
                     updates.push(`existing_loan_balance = $${paramIndex++}`);
-                    values.push(parseFloat(data.existing_loan_balance));
+                    values.push(data.existing_loan_balance);
                 }
 
                 nextStage = 'internal_audit';
@@ -1466,9 +1514,12 @@ router.post('/loans/:id/action', async (req, res) => {
 
         res.status(400).json({ message: "Action could not be completed." });
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error processing loan action:", error);
-        res.status(500).json({ message: "Internal server error" });
+        res.status(500).json({ 
+            message: "Error processing loan action. Please try again.",
+            details: error.message 
+        });
     }
 });
 
@@ -1564,6 +1615,34 @@ router.post('/loans/application', async (req, res) => {
     // @ts-ignore
     const officer = req.user as any;
     if (!officer) return res.status(401).json({ message: "Unauthorized" });
+
+    // --- Sanitize and Validate Input Fields Before Destructuring ---
+    const sanitizePayload = (payload: any) => {
+        const sanitized: any = {};
+        for (const [key, val] of Object.entries(payload)) {
+            if (val === 'null' || val === 'undefined' || val === '' || val === null || val === undefined) {
+                sanitized[key] = null;
+            } else if (typeof val === 'string') {
+                sanitized[key] = val.trim();
+            } else {
+                sanitized[key] = val;
+            }
+        }
+        return sanitized;
+    };
+
+    req.body = sanitizePayload(req.body);
+
+    const numericFields = ['average_monthly_income', 'requested_loan_amount', 'loan_tenure_months', 'casa', 'topup_amount', 'buy_over_amount'];
+    for (const field of numericFields) {
+        if (req.body[field] !== null) {
+            const num = Number(req.body[field]);
+            if (isNaN(num)) {
+                return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
+            }
+            req.body[field] = num;
+        }
+    }
 
     const {
         // Identity
@@ -1708,9 +1787,12 @@ router.post('/loans/application', async (req, res) => {
 
         res.status(201).json({ message: "Loan application created successfully", loanId: loan.id });
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error creating loan application:", error);
-        res.status(500).json({ message: "Internal server error" });
+        res.status(500).json({
+            message: "Error creating loan application. Please check your inputs or try again.",
+            details: error.message
+        });
     }
 });
 
@@ -1878,9 +1960,12 @@ router.patch('/loans/:id/attribute', async (req, res) => {
 
         res.json({ message: "Updated successfully" });
 
-    } catch (error) {
+    } catch (error: any) {
         console.error(`Error updating ${field}:`, error);
-        res.status(500).json({ message: "Internal server error" });
+        res.status(500).json({
+            message: "Error updating attribute. Please try again.",
+            details: error.message
+        });
     }
 });
 
@@ -2113,9 +2198,12 @@ router.post('/loans/bulk-approve', async (req, res) => {
             client.release();
         }
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error in bulk approval:", error);
-        res.status(500).json({ message: "Internal server error" });
+        res.status(500).json({ 
+            message: "Error processing bulk approval. Please try again.",
+            details: error.message
+        });
     }
 });
 
@@ -2136,9 +2224,12 @@ router.get('/assigned-loans', async (req, res) => {
             [user.id]
         );
         res.json(loansResult.rows);
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching assigned loans:", error);
-        res.status(500).json({ message: "Internal server error" });
+        res.status(500).json({ 
+            message: "Error fetching assigned loans.",
+            details: error.message
+        });
     }
 });
 
