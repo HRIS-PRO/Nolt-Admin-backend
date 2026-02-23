@@ -917,7 +917,7 @@ router.put('/loans/:id', async (req, res) => {
 
     const numericFields = ['average_monthly_income', 'requested_loan_amount', 'loan_tenure_months', 'casa', 'topup_amount', 'buy_over_amount'];
     for (const field of numericFields) {
-        if (req.body[field] !== null) {
+        if (req.body[field] !== null && req.body[field] !== undefined) {
             const num = Number(req.body[field]);
             if (isNaN(num)) {
                 return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
@@ -1516,9 +1516,9 @@ router.post('/loans/:id/action', async (req, res) => {
 
     } catch (error: any) {
         console.error("Error processing loan action:", error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: "Error processing loan action. Please try again.",
-            details: error.message 
+            details: error.message
         });
     }
 });
@@ -1635,7 +1635,7 @@ router.post('/loans/application', async (req, res) => {
 
     const numericFields = ['average_monthly_income', 'requested_loan_amount', 'loan_tenure_months', 'casa', 'topup_amount', 'buy_over_amount'];
     for (const field of numericFields) {
-        if (req.body[field] !== null) {
+        if (req.body[field] !== null && req.body[field] !== undefined) {
             const num = Number(req.body[field]);
             if (isNaN(num)) {
                 return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
@@ -2200,7 +2200,7 @@ router.post('/loans/bulk-approve', async (req, res) => {
 
     } catch (error: any) {
         console.error("Error in bulk approval:", error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: "Error processing bulk approval. Please try again.",
             details: error.message
         });
@@ -2226,7 +2226,7 @@ router.get('/assigned-loans', async (req, res) => {
         res.json(loansResult.rows);
     } catch (error: any) {
         console.error("Error fetching assigned loans:", error);
-        res.status(500).json({ 
+        res.status(500).json({
             message: "Error fetching assigned loans.",
             details: error.message
         });

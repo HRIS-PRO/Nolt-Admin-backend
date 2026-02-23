@@ -336,7 +336,7 @@ router.post('/loans', async (req, res) => {
 
             const numericFields = ['average_monthly_income', 'requested_loan_amount', 'loan_tenure_months', 'eligible_amount'];
             for (const field of numericFields) {
-                if (req.body[field] !== null) {
+                if (req.body[field] !== null && req.body[field] !== undefined) {
                     const num = Number(req.body[field]);
                     if (isNaN(num)) {
                         return res.status(400).json({ message: `Invalid input for ${field.replace(/_/g, ' ')}. Expected a valid number.` });
