@@ -238,6 +238,165 @@ router.post('/complete-setup', async (req, res) => {
 
 /**
  * @swagger
+ * /api/staff/loans/timeline-report:
+ *   get:
+ *     summary: Get timeline report of loan stages for Customer Experience
+ *     tags: [Staff]
+ *     responses:
+ *       200:
+ *         description: Paginated timeline report
+ */
+router.get('/loans/timeline-report', async (req, res) => {
+    // @ts-ignore
+    const user = req.user as any;
+    if (!user || (user.role !== 'customer_experience' && user.role !== 'super_admin' && user.role !== 'superadmin')) {
+        return res.status(403).json({ message: "Forbidden. Only Customer Experience and Super Admins can access." });
+    }
+
+    try {
+        const { page = 1, limit = 10, search = '' } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+
+        let baseQuery = `
+            SELECT id, applicant_full_name, requested_loan_amount, loan_type, status, stage 
+            FROM loans 
+        `;
+        const filters: string[] = [];
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (search) {
+            filters.push(`(applicant_full_name ILIKE $${paramIndex} OR CAST(id AS TEXT) ILIKE $${paramIndex})`);
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        if (filters.length > 0) {
+            baseQuery += ` WHERE ` + filters.join(' AND ');
+        }
+
+        baseQuery += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+        params.push(limit, offset);
+
+        const loansResult = await pool.query(baseQuery, params);
+        const loans = loansResult.rows;
+
+        if (loans.length === 0) {
+            return res.json({
+                data: [],
+                meta: { total: 0, page: Number(page), limit: Number(limit) }
+            });
+        }
+
+        let countQuery = `SELECT COUNT(*) FROM loans`;
+        const countParams: any[] = [];
+        if (filters.length > 0) {
+            countQuery += ` WHERE ` + filters.join(' AND ');
+            countParams.push(`%${search}%`);
+        }
+        const countResult = await pool.query(countQuery, countParams);
+        const total = parseInt(countResult.rows[0].count, 10);
+
+        const loanIds = loans.map((l: any) => l.id);
+        const placeHolders = loanIds.map((_: any, i: number) => `$${i + 1}`).join(',');
+
+        const activitiesResult = await pool.query(`
+            SELECT loan_id, action_type, created_at, metadata, description
+            FROM loan_activities
+            WHERE loan_id IN (${placeHolders})
+            ORDER BY created_at ASC
+        `, loanIds);
+
+        const activitiesByLoan = activitiesResult.rows.reduce((acc: any, act: any) => {
+            if (!acc[act.loan_id]) acc[act.loan_id] = [];
+            acc[act.loan_id].push(act);
+            return acc;
+        }, {});
+
+        const reportData: any[] = [];
+        const now = new Date();
+
+        for (const loan of loans) {
+            const acts = activitiesByLoan[loan.id] || [];
+
+            let currentStageName = 'sales';
+            let currentStageEntry: Date | null = null;
+            let timeline: any[] = [];
+
+            const pushStage = (stageName: string, entry: Date, exit: Date | null, finalNodeAction?: string, returnReason?: string) => {
+                const endTime = exit || now;
+                const tatHours = (endTime.getTime() - entry.getTime()) / (1000 * 60 * 60);
+
+                let formattedStageName = stageName.replace(/_/g, ' ');
+                formattedStageName = formattedStageName.charAt(0).toUpperCase() + formattedStageName.slice(1);
+
+                timeline.push({
+                    loanId: loan.id,
+                    productType: loan.loan_type === 'new' ? 'New Loan' : loan.loan_type === 'topup' ? 'Top-Up' : loan.loan_type === 'buy_over' ? 'Buy Over' : loan.loan_type,
+                    amount: loan.requested_loan_amount,
+                    currentStatus: loan.status,
+                    initiator: loan.applicant_full_name,
+                    stageName: formattedStageName,
+                    entryTimestamp: entry.toISOString(),
+                    exitTimestamp: exit ? exit.toISOString() : null,
+                    tatHours: tatHours.toFixed(2),
+                    finalNode: finalNodeAction,
+                    returnReason: returnReason
+                });
+            };
+
+            for (const act of acts) {
+                const actDate = new Date(act.created_at);
+
+                if (act.action_type === 'create_application') {
+                    currentStageEntry = actDate;
+                    currentStageName = 'sales';
+                } else if (['approve', 'return', 'reject'].includes(act.action_type)) {
+                    if (!currentStageEntry) currentStageEntry = actDate;
+
+                    let meta = null;
+                    try {
+                        meta = typeof act.metadata === 'string' ? JSON.parse(act.metadata) : act.metadata;
+                    } catch (e) { }
+
+                    const previousStage = meta?.from || currentStageName;
+                    const nextStage = meta?.to || 'unknown';
+
+                    pushStage(previousStage, currentStageEntry, actDate,
+                        act.action_type === 'approve' ? nextStage : (act.action_type === 'return' ? 'Returned' : 'Rejected'),
+                        act.action_type === 'return' ? (meta?.reason || 'See comments') : undefined
+                    );
+
+                    currentStageName = nextStage;
+                    currentStageEntry = actDate;
+                }
+            }
+
+            if (currentStageEntry && loan.status !== 'rejected') {
+                // Push active stage if not completely rejected or disbursed. Even disbursed could be active "disbursed" stage but let's just push it.
+                pushStage(currentStageName, currentStageEntry, null, undefined, undefined);
+            }
+
+            reportData.push(...timeline);
+        }
+
+        res.json({
+            data: reportData.reverse(), // most recent first
+            meta: {
+                total,
+                page: Number(page),
+                limit: Number(limit)
+            }
+        });
+
+    } catch (error) {
+        console.error("Timeline report error:", error);
+        res.status(500).json({ message: "Error fetching timeline report" });
+    }
+});
+
+/**
+ * @swagger
  * /api/staff/loans:
  *   get:
  *     summary: Get all loans with officer details
