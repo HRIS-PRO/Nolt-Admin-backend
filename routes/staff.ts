@@ -1732,10 +1732,17 @@ router.post('/loans/:id/action', async (req, res) => {
             }
             if (action === 'approve') {
                 nextStage = 'finance';
-                // Status remains 'processing' until Finance approves/disburses as per new request
+                // Automatically set status to 'approved' when moving to Finance
+                updates.push(`status = $${paramIndex++}`);
+                values.push('approved');
                 updates.push(`disb_date = CURRENT_TIMESTAMP`);
             }
-            if (action === 'return') nextStage = getReturnStage('credit_check_2');
+            if (action === 'return') {
+                nextStage = getReturnStage('credit_check_2');
+                // Ensure status is 'pending' if returned
+                updates.push(`status = $${paramIndex++}`);
+                values.push('pending');
+            }
         }
 
         // 5. Finance -> Disbursed (Final Approval)
@@ -1746,9 +1753,14 @@ router.post('/loans/:id/action', async (req, res) => {
             if (action === 'approve') {
                 nextStage = 'disbursed';
                 updates.push(`status = $${paramIndex++}`); // Final status
-                values.push('approved'); // Changed from 'disbursed' back to 'approved' as per request
+                values.push('disbursed');
             }
-            if (action === 'return') nextStage = getReturnStage('internal_audit');
+            if (action === 'return') {
+                nextStage = getReturnStage('internal_audit');
+                // Ensure status is 'pending' if returned to any stage before finance
+                updates.push(`status = $${paramIndex++}`);
+                values.push('pending');
+            }
         }
 
         else if (currentStage === 'disbursed') {
@@ -1837,7 +1849,9 @@ router.post('/loans/:id/action', async (req, res) => {
                 io.emit('loan_updated', {
                     id: Number(id),
                     stage: nextStage || 'rejected',
-                    status: (action === 'reject' ? 'rejected' : 'approved'), // Status should be derived from action or nextStage
+                    status: (action === 'reject' ? 'rejected' :
+                        nextStage === 'disbursed' ? 'disbursed' :
+                            nextStage === 'finance' ? 'approved' : 'pending'),
                     updatedBy: user.email,
                     timestamp: new Date()
                 });
