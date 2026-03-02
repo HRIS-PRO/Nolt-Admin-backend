@@ -258,15 +258,16 @@ router.get('/loans/timeline-report', async (req, res) => {
         const offset = (Number(page) - 1) * Number(limit);
 
         let baseQuery = `
-            SELECT id, applicant_full_name, requested_loan_amount, loan_type, status, stage 
-            FROM loans 
+            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.status, l.stage, c.full_name as officer_name
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
         `;
         const filters: string[] = [];
         const params: any[] = [];
         let paramIndex = 1;
 
         if (search) {
-            filters.push(`(applicant_full_name ILIKE $${paramIndex} OR CAST(id AS TEXT) ILIKE $${paramIndex})`);
+            filters.push(`(l.applicant_full_name ILIKE $${paramIndex} OR CAST(l.id AS TEXT) ILIKE $${paramIndex})`);
             params.push(`%${search}%`);
             paramIndex++;
         }
@@ -275,7 +276,7 @@ router.get('/loans/timeline-report', async (req, res) => {
             baseQuery += ` WHERE ` + filters.join(' AND ');
         }
 
-        baseQuery += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+        baseQuery += ` ORDER BY l.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
         params.push(limit, offset);
 
         const loansResult = await pool.query(baseQuery, params);
@@ -336,6 +337,7 @@ router.get('/loans/timeline-report', async (req, res) => {
                     amount: loan.requested_loan_amount,
                     currentStatus: loan.status,
                     initiator: loan.applicant_full_name,
+                    officerName: loan.officer_name || '-',
                     stageName: formattedStageName,
                     entryTimestamp: entry.toISOString(),
                     exitTimestamp: exit ? exit.toISOString() : null,
@@ -416,15 +418,16 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
         const { search = '' } = req.query;
 
         let baseQuery = `
-            SELECT id, applicant_full_name, requested_loan_amount, loan_type, status, stage
-            FROM loans
+            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.status, l.stage, c.full_name as officer_name
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
         `;
         const filters: string[] = [];
         const params: any[] = [];
         let paramIndex = 1;
 
         if (search) {
-            filters.push(`(applicant_full_name ILIKE $${paramIndex} OR CAST(id AS TEXT) ILIKE $${paramIndex})`);
+            filters.push(`(l.applicant_full_name ILIKE $${paramIndex} OR CAST(l.id AS TEXT) ILIKE $${paramIndex})`);
             params.push(`%${search}%`);
             paramIndex++;
         }
@@ -441,7 +444,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
         if (loans.length === 0) {
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="timeline_report.csv"');
-            res.send('Reference,Product Type,Amount,Current Status,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
+            res.send('Reference,Product Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
             return;
         }
 
@@ -484,6 +487,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
                     amount: loan.requested_loan_amount,
                     currentStatus: loan.status,
                     initiator: loan.applicant_full_name,
+                    officerName: loan.officer_name || '-',
                     stageName: formattedStageName,
                     entryTimestamp: entry.toISOString(),
                     exitTimestamp: exit ? exit.toISOString() : null,
@@ -530,7 +534,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
         reportData.reverse();
 
         // Build CSV
-        const csvHeaders = ['Reference', 'Product Type', 'Amount', 'Current Status', 'Initiator', 'Stage Name', 'Stage Entry Timestamp', 'Stage Exit Timestamp', 'Stage TAT (Hours)', 'Final Node', 'Return Reason'];
+        const csvHeaders = ['Reference', 'Product Type', 'Amount', 'Current Status', 'Sales Officer', 'Initiator', 'Stage Name', 'Stage Entry Timestamp', 'Stage Exit Timestamp', 'Stage TAT (Hours)', 'Final Node', 'Return Reason'];
 
         const escapeCsvField = (field: any): string => {
             if (field === null || field === undefined) return '';
@@ -546,6 +550,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
             row.productType,
             Number(row.amount).toFixed(2),
             row.currentStatus,
+            row.officerName,
             row.initiator,
             row.stageName,
             row.entryTimestamp ? new Date(row.entryTimestamp).toLocaleString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '',
