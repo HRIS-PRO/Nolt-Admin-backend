@@ -436,7 +436,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
             baseQuery += ` WHERE ` + filters.join(' AND ');
         }
 
-        baseQuery += ` ORDER BY created_at DESC`;
+        baseQuery += ` ORDER BY l.created_at DESC`;
 
         const loansResult = await pool.query(baseQuery, params);
         const loans = loansResult.rows;
