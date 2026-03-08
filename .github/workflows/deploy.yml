@@ -1,0 +1,61 @@
+name: Nolt-admin Docker CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  EB_APPLICATION_NAME: middleware
+  EB_ENVIRONMENT_NAME: NoltAdmin1
+
+  
+
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_PROD_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+    
+      - name: Create deploy.zip (Dockerfile bundle)
+        run: |
+          set -euo pipefail
+          rm -f deploy.zip
+
+          # Make sure Dockerfile exists
+          test -f Dockerfile
+
+          # Zip repo contents (exclude secrets + junk)
+          zip -r deploy.zip . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "node_modules/*" \
+            -x "**/*.log" \
+            -x ".env"
+
+
+      - name: Deploy to Elastic Beanstalk
+        uses: einaregilsson/beanstalk-deploy@v22
+        with:
+          aws_access_key: ${{ secrets.AWS_PROD_ACCESS_KEY_ID }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          region: ${{ env.AWS_REGION }}
+          application_name: ${{ env.EB_APPLICATION_NAME }}
+          environment_name: ${{ env.EB_ENVIRONMENT_NAME }}
+          version_label: prod-${{ github.sha }}-${{ github.run_number }}
+          deployment_package: deploy.zip
+          wait_for_deployment: false
