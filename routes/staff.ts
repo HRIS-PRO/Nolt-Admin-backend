@@ -446,7 +446,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
             res.setHeader('Content-Disposition', 'attachment; filename="timeline_report.csv"');
             res.send('Reference,Product Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
             return;
-        }
+        } 
 
         const loanIds = loans.map((l: any) => l.id);
         const placeHolders = loanIds.map((_: any, i: number) => `$${i + 1}`).join(',');
