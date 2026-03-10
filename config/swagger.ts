@@ -13,6 +13,11 @@ const options = {
                 url: 'https://nolt-admin-backend-production.up.railway.app',
                 description: 'Production server',
             },
+
+            {
+                url: 'http://noltadmin1.eu-central-1.elasticbeanstalk.com',
+                description: 'Staging server',
+            },
         ],
         components: {
             securitySchemes: {
