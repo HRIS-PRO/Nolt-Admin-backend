@@ -79,7 +79,8 @@ app.use(session({
     store: new PgSession({
         pool: pool,
         createTableIfMissing: true,
-        tableName: 'user_sessions'
+        tableName: 'user_sessions',
+        pruneSessionInterval: 60 * 15 // OPTIMIZATION: Prune expired sessions only every 15 minutes instead of constantly grabbing connections
     }),
     name: 'nolt_admin_sid', // Rename to avoid zombie cookies
     secret: process.env.SESSION_SECRET || 'secret',
