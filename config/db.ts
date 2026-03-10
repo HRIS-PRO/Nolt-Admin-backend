@@ -10,7 +10,7 @@ if (!connectionString) {
 const pool = new Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
-    max: 5,
+    max: 20, // INCREASED: Allow up to 20 concurrent connections to handle API pressure
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
 });
