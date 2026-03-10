@@ -4,15 +4,20 @@ const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-  throw new Error('DATABASE_URL is not set');
+    throw new Error('DATABASE_URL is not set');
 }
 
 const pool = new Pool({
-  connectionString,
-  ssl: { rejectUnauthorized: false },
-  max: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+});
+
+// Handle idle connection errors so they don't crash the server
+pool.on('error', (err) => {
+    console.error('Unexpected error on idle client', err);
 });
 
 export default pool;
