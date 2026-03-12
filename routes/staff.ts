@@ -446,7 +446,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
             res.setHeader('Content-Disposition', 'attachment; filename="timeline_report.csv"');
             res.send('Reference,Product Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
             return;
-        } 
+        }
 
         const loanIds = loans.map((l: any) => l.id);
         const placeHolders = loanIds.map((_: any, i: number) => `$${i + 1}`).join(',');
@@ -783,7 +783,16 @@ router.get('/users', async (req, res) => {
                 l.primary_home_address,
                 l.bank_name,
                 l.account_number,
-                l.account_name
+                l.account_name,
+                l.gender,
+                l.marital_status,
+                l.religion,
+                l.state_of_origin,
+                l.residential_status,
+                l.ippis_number,
+                l.staff_id,
+                l.average_monthly_income,
+                l.mda_tertiary
             ${baseQuery}
             ORDER BY c.id DESC, l.created_at DESC
             LIMIT $${paramIndex++} OFFSET $${paramIndex++}
@@ -989,7 +998,10 @@ router.get('/customers/:id', async (req, res) => {
                 c.*,
                 l.mobile_number, l.state_of_residence, l.mda_tertiary as employer,
                 l.bvn, l.nin, l.date_of_birth, l.primary_home_address,
-                l.bank_name, l.account_number, l.account_name
+                l.bank_name, l.account_number, l.account_name,
+                l.gender, l.marital_status, l.religion, l.state_of_origin,
+                l.residential_status, l.ippis_number, l.staff_id,
+                l.average_monthly_income, l.mda_tertiary
             FROM customers c
             LEFT JOIN loans l ON c.id = l.customer_id
             WHERE c.id = $1
@@ -1024,6 +1036,8 @@ router.get('/customers/:id', async (req, res) => {
                 }
             });
         });
+
+        console.log(`[DEBUG] Fetching customer ${id} details. Profile has gender: ${user.gender}, income: ${user.average_monthly_income}`);
 
         res.json({
             profile: user,
