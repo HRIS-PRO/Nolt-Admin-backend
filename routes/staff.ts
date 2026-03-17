@@ -3,14 +3,52 @@ import pool from '../config/db.js';
 import { zeptoService as resendService, zeptoService } from '../services/zeptoService.js';
 import { exportService } from '../services/exportService.js';
 import bcrypt from 'bcrypt';
+import multer from 'multer';
 
 import { getIO } from '../socket.js';
+
+// In-memory multer for CSV bulk upload
+const csvUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max
+    fileFilter: (_req, file, cb) => {
+        if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only CSV files are accepted'));
+        }
+    }
+});
+
+/** Simple CSV parser — handles quoted fields */
+function parseCsv(raw: string): Record<string, string>[] {
+    const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim());
+    if (lines.length < 2) return [];
+
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+    const rows: Record<string, string>[] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+        if (cols.every(c => !c)) continue;
+        const row: Record<string, string> = {};
+        headers.forEach((h, idx) => { row[h] = cols[idx] ?? ''; });
+        rows.push(row);
+    }
+    return rows;
+}
+
+/** Generates an alphanumeric temp password like "Ab3Kp9Xz" */
+function generatePassword(length = 10): string {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
 
 const router = Router();
 
 // Middleware to check if user is a Superadmin
 const isSuperAdmin = (req: any, res: any, next: any) => {
-    if (req.isAuthenticated() && req.user.role === 'super_admin') {
+    if (req.isAuthenticated() && (req.user.role === 'super_admin' || req.user.role === 'superadmin')) {
         return next();
     }
     return res.status(403).json({ message: "Access denied. Superadmin only." });
@@ -18,7 +56,7 @@ const isSuperAdmin = (req: any, res: any, next: any) => {
 
 /**
  * @swagger
- * /staff/invite:
+ * /api/staff/invite:
  *   post:
  *     summary: Invite a new staff member
  *     tags: [Staff]
@@ -101,7 +139,126 @@ router.post('/invite', isSuperAdmin, async (req, res) => {
 
 /**
  * @swagger
- * /staff/revoke-access:
+ * /api/staff/bulk-invite:
+ *   post:
+ *     summary: Bulk-create staff users from a CSV file
+ *     tags: [Staff]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: CSV file with columns "full_name" and "email"
+ *     responses:
+ *       200:
+ *         description: Bulk invite result with per-row success/failure details
+ *       400:
+ *         description: No file or invalid CSV
+ *       403:
+ *         description: Superadmin only
+ */
+router.post('/bulk-invite', isSuperAdmin, csvUpload.single('file'), async (req: any, res: any) => {
+    if (!req.file) {
+        return res.status(400).json({ message: 'No CSV file uploaded. Use field name "file".' });
+    }
+
+    const rawCsv = req.file.buffer.toString('utf-8');
+    const rows = parseCsv(rawCsv);
+
+    if (rows.length === 0) {
+        return res.status(400).json({ message: 'CSV is empty or has no data rows. Required columns: full_name, email' });
+    }
+
+    // Validate required columns exist
+    const firstRow = rows[0];
+    if (!('full_name' in firstRow) || !('email' in firstRow)) {
+        return res.status(400).json({
+            message: 'CSV must have "full_name" and "email" columns (case-insensitive).'
+        });
+    }
+
+    const results: {
+        row: number;
+        email: string;
+        full_name: string;
+        status: 'created' | 'skipped' | 'failed';
+        reason?: string;
+        email_sent?: boolean;
+    }[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const email = (row['email'] || '').trim().toLowerCase();
+        const full_name = (row['full_name'] || '').trim();
+
+        if (!email || !full_name) {
+            results.push({ row: i + 2, email, full_name, status: 'skipped', reason: 'Missing email or full_name' });
+            continue;
+        }
+
+        // Basic email format check
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            results.push({ row: i + 2, email, full_name, status: 'skipped', reason: 'Invalid email format' });
+            continue;
+        }
+
+        try {
+            // Check for duplicates
+            const existing = await pool.query('SELECT id FROM customers WHERE email = $1 LIMIT 1', [email]);
+            if (existing.rows.length > 0) {
+                results.push({ row: i + 2, email, full_name, status: 'skipped', reason: 'Email already exists' });
+                continue;
+            }
+
+            // Generate & hash password
+            const tempPassword = generatePassword(10);
+            const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+            // Insert — role is NULL until manually assigned
+            await pool.query(
+                `INSERT INTO customers (email, full_name, password_hash, role, is_active, new_comer)
+                 VALUES ($1, $2, $3, NULL, TRUE, TRUE)`,
+                [email, full_name, hashedPassword]
+            );
+
+            // Send welcome email with credentials
+            let emailSent = false;
+            try {
+                await zeptoService.sendWelcomeEmail(email, full_name, tempPassword);
+                emailSent = true;
+            } catch (emailErr) {
+                console.error(`[BulkInvite] Failed to send email to ${email}:`, emailErr);
+            }
+
+            results.push({ row: i + 2, email, full_name, status: 'created', email_sent: emailSent });
+
+        } catch (err: any) {
+            console.error(`[BulkInvite] Error processing row ${i + 2}:`, err);
+            results.push({ row: i + 2, email, full_name, status: 'failed', reason: err?.message || 'Database error' });
+        }
+    }
+
+    const created = results.filter(r => r.status === 'created').length;
+    const skipped = results.filter(r => r.status === 'skipped').length;
+    const failed = results.filter(r => r.status === 'failed').length;
+
+    return res.json({
+        message: `Bulk invite complete. Created: ${created}, Skipped: ${skipped}, Failed: ${failed}.`,
+        summary: { total: rows.length, created, skipped, failed },
+        results
+    });
+});
+
+/**
+ * @swagger
+ * /api/staff/revoke-access:
  *   post:
  *     summary: Revoke access for a staff member
  *     tags: [Staff]
@@ -719,7 +876,7 @@ router.get('/loans/pending', async (req, res) => {
 
 /**
  * @swagger
- * /staff/users:
+ * /api/staff/users:
  *   get:
  *     summary: Get all users with their roles
  *     tags: [Staff]
@@ -744,12 +901,16 @@ router.get('/users', async (req, res) => {
         const filters: string[] = [];
 
         if (role) {
-            filters.push(`c.role = $${paramIndex++}`);
-            params.push(role);
+            if (role === 'unassigned') {
+                filters.push(`c.role IS NULL`);
+            } else {
+                filters.push(`c.role = $${paramIndex++}`);
+                params.push(role);
+            }
         }
 
         if (exclude_role) {
-            filters.push(`c.role != $${paramIndex++}`);
+            filters.push(`(c.role != $${paramIndex++} OR c.role IS NULL)`);
             params.push(exclude_role);
         }
 
