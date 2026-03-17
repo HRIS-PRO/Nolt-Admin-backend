@@ -30,6 +30,8 @@ const migrationSequence = [
     'alter_loan_documents_add_draft_id.ts',
     'alter_loans_globally.ts',
     'alter_loans_signature_array.ts',
+    'add_topup_and_buyover_columns.ts',
+    'create_loan_activities_table.ts',
     'make_google_id_nullable.ts',
     '20240312_create_yield_rates.ts',
     'seed_superadmins.ts'

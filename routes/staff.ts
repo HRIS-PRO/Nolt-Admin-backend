@@ -2219,6 +2219,19 @@ router.post('/loans/application', async (req, res) => {
         // Construct Full Name for Backward Compatibility
         const applicant_full_name = `${surname} ${first_name} ${middle_name || ''}`.trim();
 
+        // 0. Check for existing active loans with the same BVN
+        if (bvn) {
+            const activeLoanCheck = await pool.query(
+                "SELECT id FROM loans WHERE bvn = $1 AND status NOT IN ('rejected') LIMIT 1",
+                [bvn]
+            );
+            if (activeLoanCheck.rows.length > 0) {
+                return res.status(400).json({
+                    message: `A client with this BVN already has an active or pending loan (Loan ID: ${activeLoanCheck.rows[0].id}).`
+                });
+            }
+        }
+
         // 1. Customer Resolution
         let customerId;
         const emailToUse = personal_email || `${mobile_number}@placeholder.nolt`;
