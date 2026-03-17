@@ -415,7 +415,7 @@ router.get('/loans/timeline-report', async (req, res) => {
         const offset = (Number(page) - 1) * Number(limit);
 
         let baseQuery = `
-            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.status, l.stage, c.full_name as officer_name
+            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.product_type, l.status, l.stage, c.full_name as officer_name
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
         `;
@@ -490,7 +490,8 @@ router.get('/loans/timeline-report', async (req, res) => {
 
                 timeline.push({
                     loanId: loan.id,
-                    productType: loan.loan_type === 'new' ? 'New Loan' : loan.loan_type === 'topup' ? 'Top-Up' : loan.loan_type === 'buy_over' ? 'Buy Over' : loan.loan_type,
+                    loanType: loan.loan_type === 'new' ? 'New Loan' : loan.loan_type === 'topup' ? 'Top-Up' : loan.loan_type === 'buy_over' ? 'Buy Over' : loan.loan_type,
+                    productType: loan.product_type || 'Public Sector Loan',
                     amount: loan.requested_loan_amount,
                     currentStatus: loan.status,
                     initiator: loan.applicant_full_name,
@@ -575,7 +576,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
         const { search = '' } = req.query;
 
         let baseQuery = `
-            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.status, l.stage, c.full_name as officer_name
+            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.product_type, l.status, l.stage, c.full_name as officer_name
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
         `;
@@ -601,7 +602,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
         if (loans.length === 0) {
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="timeline_report.csv"');
-            res.send('Reference,Product Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
+            res.send('Reference,Loan Type,Product Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
             return;
         }
 
@@ -640,7 +641,8 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
 
                 timeline.push({
                     loanId: loan.id,
-                    productType: loan.loan_type === 'new' ? 'New Loan' : loan.loan_type === 'topup' ? 'Top-Up' : loan.loan_type === 'buy_over' ? 'Buy Over' : loan.loan_type,
+                    loanType: loan.loan_type === 'new' ? 'New Loan' : loan.loan_type === 'topup' ? 'Top-Up' : loan.loan_type === 'buy_over' ? 'Buy Over' : loan.loan_type,
+                    productType: loan.product_type || 'Public Sector Loan',
                     amount: loan.requested_loan_amount,
                     currentStatus: loan.status,
                     initiator: loan.applicant_full_name,
@@ -691,7 +693,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
         reportData.reverse();
 
         // Build CSV
-        const csvHeaders = ['Reference', 'Product Type', 'Amount', 'Current Status', 'Sales Officer', 'Initiator', 'Stage Name', 'Stage Entry Timestamp', 'Stage Exit Timestamp', 'Stage TAT (Hours)', 'Final Node', 'Return Reason'];
+        const csvHeaders = ['Reference', 'Loan Type', 'Product Type', 'Amount', 'Current Status', 'Sales Officer', 'Initiator', 'Stage Name', 'Stage Entry Timestamp', 'Stage Exit Timestamp', 'Stage TAT (Hours)', 'Final Node', 'Return Reason'];
 
         const escapeCsvField = (field: any): string => {
             if (field === null || field === undefined) return '';
@@ -704,6 +706,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
 
         const csvRows = reportData.map(row => [
             `APP-${row.loanId.toString().padStart(3, '0')}`,
+            row.loanType,
             row.productType,
             Number(row.amount).toFixed(2),
             row.currentStatus,
