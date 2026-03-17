@@ -1,7 +1,6 @@
 import sql from '../config/db.js';
 
 const SUPERADMIN_EMAILS = [
-    'exceldistrings@gmail.com',
     'divineobinali9@gmail.com'
 ];
 
