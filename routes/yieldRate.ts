@@ -99,6 +99,38 @@ router.get('/active', async (req, res) => {
 
 /**
  * @swagger
+ * /api/yield-rates/calculate:
+ *   get:
+ *     summary: Find a rate matching amount and tenure
+ *     tags: [Yield Rates]
+ */
+router.get('/calculate', async (req, res) => {
+    try {
+        const { plan, currency, amount, tenure } = req.query;
+        if (!plan || !currency || !amount || !tenure) {
+            return res.status(400).json({ message: "Missing required parameters" });
+        }
+
+        const rate = await yieldRateService.calculateRate({
+            plan_name: plan as string,
+            currency: currency as string,
+            amount: parseFloat(amount as string),
+            tenure_months: parseInt(tenure as string)
+        });
+
+        if (!rate) {
+            return res.status(404).json({ message: "No interest rate tier found for this configuration." });
+        }
+
+        res.json(rate);
+    } catch (error: any) {
+        console.error("Calculate Yield Rate Error:", error);
+        res.status(500).json({ message: error.message || "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
  * /api/yield-rates/{id}:
  *   put:
  *     summary: Update a yield rate

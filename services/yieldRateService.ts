@@ -108,5 +108,22 @@ export const yieldRateService = {
         const query = `SELECT * FROM yield_rates WHERE is_active = TRUE ORDER BY tenure_months ASC;`;
         const result = await pool.query(query);
         return result.rows;
+    },
+
+    async calculateRate(params: { plan_name: string, currency: string, amount: number, tenure_months: number }) {
+        const query = `
+            SELECT * FROM yield_rates 
+            WHERE (plan_name ILIKE '%' || $1 || '%')
+            AND currency = $2 
+            AND tenure_months >= $3 
+            AND is_active = TRUE
+            AND $4 >= min_amount 
+            AND (max_amount IS NULL OR $4 <= max_amount)
+            ORDER BY tenure_months ASC, created_at DESC 
+            LIMIT 1;
+        `;
+        const values = [params.plan_name, params.currency, params.tenure_months, params.amount];
+        const result = await pool.query(query, values);
+        return result.rows[0];
     }
 };

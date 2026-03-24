@@ -835,6 +835,27 @@ router.get('/loans', async (req, res) => {
 
 /**
  * @swagger
+ * /api/staff/investments:
+ *   get:
+ *     summary: Get all investments for staff
+ *     tags: [Staff]
+ *     responses:
+ *       200:
+ *         description: List of all investments
+ */
+router.get('/investments', async (req, res) => {
+    try {
+        const { investmentService } = await import('../services/investmentService.js');
+        const investments = await investmentService.getAllInvestments();
+        res.json(investments);
+    } catch (error) {
+        console.error("Error fetching investments:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
  * /api/staff/loans/pending:
  *   get:
  *     summary: Get pending loans queue with officer details
