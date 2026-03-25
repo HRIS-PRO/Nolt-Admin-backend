@@ -30,14 +30,16 @@ export const investmentService = {
                     is_on_behalf, representative_relation, is_pep,
                     nok_name, nok_relationship, nok_address,
                     target_amount, rollover_option,
-                    status, payment_reference
+                    status, payment_reference,
+                    contribution_frequency, interest_rate
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17,
                     $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
                     $29, $30,
                     $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44,
-                    'pending', $45
+                    'pending', $45,
+                    $46, $47
                 )
                 RETURNING *
             `;
@@ -67,7 +69,9 @@ export const investmentService = {
                 data.nok_address || null,
                 data.target_amount || null,
                 data.rollover_option || null,
-                data.payment_reference || null
+                data.payment_reference || null,
+                data.contribution_frequency || null,
+                data.interest_rate || null
             ];
 
             const result = await client.query(query, values);

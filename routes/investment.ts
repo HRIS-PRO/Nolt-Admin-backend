@@ -114,7 +114,10 @@ router.get('/', isAuthenticated, async (req: any, res) => {
 router.get('/latest', isAuthenticated, async (req: any, res) => {
     try {
         const result = await pool.query(
-            'SELECT * FROM investments WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 1',
+            `SELECT i.*, c.email as customer_email 
+             FROM investments i
+             LEFT JOIN customers c ON i.customer_id = c.id
+             WHERE i.customer_id = $1 ORDER BY i.created_at DESC LIMIT 1`,
             [req.user.id]
         );
         res.json(result.rows[0] || null);

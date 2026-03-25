@@ -842,6 +842,8 @@ router.get('/loans', async (req, res) => {
  *     responses:
  *       200:
  *         description: List of all investments
+ *       500:
+ *         description: Internal server error
  */
 router.get('/investments', async (req, res) => {
     try {
@@ -850,6 +852,46 @@ router.get('/investments', async (req, res) => {
         res.json(investments);
     } catch (error) {
         console.error("Error fetching investments:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/{id}:
+ *   get:
+ *     summary: Get a specific investment by ID
+ *     tags: [Staff]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Investment details
+ *       404:
+ *         description: Investment not found
+ */
+router.get('/investments/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const query = `
+            SELECT i.*, c.full_name as customer_name, c.email as customer_email, c.avatar_url, c.is_active as customer_active
+            FROM investments i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            WHERE i.id = $1
+        `;
+        const result = await pool.query(query, [id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Investment not found" });
+        }
+
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error("Error fetching investment details:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
