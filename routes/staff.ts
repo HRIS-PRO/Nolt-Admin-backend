@@ -898,6 +898,68 @@ router.get('/investments/:id', async (req, res) => {
 
 /**
  * @swagger
+ * /api/staff/investments/{id}/action:
+ *   put:
+ *     summary: Approve or reject an investment to move it through the pipeline
+ *     tags: [Staff]
+ */
+router.put('/investments/:id/action', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { action } = req.body; // 'approve' or 'reject'
+        const user = req.user as any;
+        const role = user.role;
+
+        const investmentRes = await pool.query(`SELECT status, stage FROM investments WHERE id = $1`, [id]);
+        if (investmentRes.rows.length === 0) return res.status(404).json({ message: "Investment not found" });
+
+        const investment = investmentRes.rows[0];
+        
+        if (investment.status !== 'pending') {
+            return res.status(400).json({ message: "Investment is no longer pending." });
+        }
+
+        let newStage = investment.stage;
+        let newStatus = investment.status;
+
+        if (action === 'reject') {
+            newStage = 'rejected';
+            newStatus = 'rejected';
+        } else if (action === 'approve') {
+            if (investment.stage === 'submitted') {
+                if (role !== 'customer_experience' && role !== 'super_admin') return res.status(403).json({ message: "Only Customer Experience can approve at this stage." });
+                newStage = 'compliance_review';
+            } else if (investment.stage === 'compliance_review') {
+                if (role !== 'compliance' && role !== 'super_admin') return res.status(403).json({ message: "Only Compliance can approve at this stage." });
+                newStage = 'finance_review';
+            } else if (investment.stage === 'finance_review') {
+                if (role !== 'finance' && role !== 'super_admin') return res.status(403).json({ message: "Only Finance can approve at this stage." });
+                newStage = 'active';
+                newStatus = 'active';
+            } else {
+                return res.status(400).json({ message: "Invalid stage for approval." });
+            }
+        }
+
+        if (newStatus === 'active') {
+            await pool.query(`
+                UPDATE investments 
+                SET stage = $1, status = $2, start_date = CURRENT_TIMESTAMP, maturity_date = CURRENT_TIMESTAMP + (tenure_days || ' days')::interval 
+                WHERE id = $3
+            `, [newStage, newStatus, id]);
+        } else {
+            await pool.query(`UPDATE investments SET stage = $1, status = $2 WHERE id = $3`, [newStage, newStatus, id]);
+        }
+
+        res.json({ message: `Investment successfully ${action}d to ${newStage}` });
+    } catch (error) {
+        console.error("Error updating investment action:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
  * /api/staff/loans/pending:
  *   get:
  *     summary: Get pending loans queue with officer details
