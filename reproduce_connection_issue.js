@@ -11,10 +11,11 @@ console.log(`SSL Setting: ${process.env.NODE_ENV === 'production' ? '{ rejectUna
 
 const pool = new Pool({
     connectionString,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    ssl: connectionString.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: 10000,
+    keepAlive: true,
 });
 
 async function testConfig() {

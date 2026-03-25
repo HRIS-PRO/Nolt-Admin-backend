@@ -38,10 +38,20 @@ router.get('/dashboard', async (req, res) => {
         const pendingLoansResult = await pool.query("SELECT COUNT(*)::int as count FROM loans WHERE status = 'pending'");
         const pendingLoans = pendingLoansResult.rows[0].count;
 
+        // Fetch Total Investments
+        const totalInvestmentsResult = await pool.query('SELECT COUNT(*)::int as count FROM investments');
+        const totalInvestments = totalInvestmentsResult.rows[0].count;
+
+        // Fetch Investment Volume
+        const investmentVolumeResult = await pool.query("SELECT COALESCE(SUM(investment_amount), 0)::numeric as volume FROM investments WHERE status IN ('pending', 'approved')");
+        const investmentVolume = investmentVolumeResult.rows[0].volume;
+
         res.json({
             totalLoans,
             totalUsers,
-            pendingLoans
+            pendingLoans,
+            totalInvestments,
+            investmentVolume
         });
 
     } catch (error) {

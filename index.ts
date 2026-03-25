@@ -123,6 +123,7 @@ import otpRoutes from './routes/auth_otp.js';
 import uploadRoutes from './routes/upload.js';
 import statsRoutes from './routes/stats.js';
 import miscRoutes from './routes/misc.js';
+import yieldRateRoutes from './routes/yieldRate.js';
 
 app.get('/', (req, res) => {
     res.json({ message: "Welcome to Nolt Admin Backend API" });
@@ -138,6 +139,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 import investmentRoutes from './routes/investment.js';
 app.use('/api/investments', investmentRoutes);
+app.use('/api/yield-rates', yieldRateRoutes);
 
 import { zeptoService as resendService } from './services/zeptoService.js';
 
