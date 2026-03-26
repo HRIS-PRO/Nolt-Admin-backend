@@ -138,7 +138,9 @@ app.use('/api/misc', miscRoutes); // Register misc (banks) route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api', customerRoutes);
 import investmentRoutes from './routes/investment.js';
+import kycRoutes from './routes/kyc.js';
 app.use('/api/investments', investmentRoutes);
+app.use('/api/kyc', kycRoutes);
 app.use('/api/yield-rates', yieldRateRoutes);
 
 import { zeptoService as resendService } from './services/zeptoService.js';

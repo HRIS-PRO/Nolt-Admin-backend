@@ -18,7 +18,7 @@ const isAuthenticated = (req: any, res: any, next: any) => {
  * @swagger
  * /api/investments:
  *   post:
- *     summary: Create a new Corporate Investment
+ *     summary: Create a new Investment (Individual or Corporate)
  *     tags: [Investments]
  *     requestBody:
  *       required: true
@@ -27,11 +27,17 @@ const isAuthenticated = (req: any, res: any, next: any) => {
  *           schema:
  *             type: object
  *             properties:
- *               investment_type: { type: string, enum: [NOLT_RISE, NOLT_VAULT] }
+ *               entity_type: { type: string, enum: [INDIVIDUAL, CORPORATE] }
+ *               investment_type: { type: string, enum: [NOLT_RISE, NOLT_VAULT, NOLT_SURGE] }
  *               company_name: { type: string }
- *               company_address: { type: string }
- *               date_of_incorporation: { type: string, format: date }
- *               directors_are_pep: { type: boolean }
+ *               business_address: { type: string }
+ *               rc_number: { type: string }
+ *               incorp_date: { type: string, format: date }
+ *               tin: { type: string }
+ *               business_nature: { type: string }
+ *               is_authorized_rep: { type: boolean }
+ *               auth_rep_phone: { type: string }
+ *               directors: { type: array, items: { type: object } }
  *               rep_full_name: { type: string }
  *               rep_phone_number: { type: string }
  *               rep_bvn: { type: string }
@@ -42,18 +48,8 @@ const isAuthenticated = (req: any, res: any, next: any) => {
  *               rep_street_address: { type: string }
  *               investment_amount: { type: number }
  *               tenure_days: { type: number }
-
  *               currency: { type: string, enum: [NGN, USD] }
  *               signatures: { type: array, items: { type: string } }
- *               cac_url: { type: string }
- *               rep_selfie_url: { type: string }
- *               rep_id_url: { type: string }
- *               director_1_id_url: { type: string }
- *               director_2_id_url: { type: string }
- *               memart_url: { type: string }
- *               annual_returns_url: { type: string }
- *               board_resolution_url: { type: string }
- *               aml_cft_url: { type: string }
  *     responses:
  *       201:
  *         description: Investment created
@@ -64,7 +60,6 @@ router.post('/', isAuthenticated, async (req: any, res) => {
         const keys = [
             'investment_type',
             'rep_full_name', 'rep_phone_number',
-            'rep_state_of_residence',
             'investment_amount', 'tenure_days', 'currency',
             'signatures'
         ];
@@ -73,6 +68,15 @@ router.post('/', isAuthenticated, async (req: any, res) => {
         const missing = keys.filter(k => !req.body[k]);
         if (missing.length > 0) {
             return res.status(400).json({ message: `Missing required fields: ${missing.join(', ')}` });
+        }
+
+        // Conditional validation for Corporate
+        if (req.body.entity_type === 'CORPORATE') {
+            if (!req.body.company_name) return res.status(400).json({ message: "Missing company_name" });
+            if (!req.body.business_address) return res.status(400).json({ message: "Missing business_address" });
+            if (!req.body.rc_number) return res.status(400).json({ message: "Missing rc_number" });
+            if (!req.body.incorp_date) return res.status(400).json({ message: "Missing incorp_date" });
+            if (!req.body.directors || req.body.directors.length === 0) return res.status(400).json({ message: "Missing directors" });
         }
 
         const { giftToken } = req.body;
