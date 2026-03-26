@@ -17,7 +17,7 @@ export const investmentService = {
             const query = `
                 INSERT INTO investments (
                     customer_id, investment_type,
-                    company_name, company_address, date_of_incorporation, directors_are_pep,
+                    company_name, business_address, date_of_incorporation, directors_are_pep,
                     rep_full_name, rep_phone_number, rep_bvn, rep_nin, 
                     rep_state_of_origin, rep_state_of_residence, rep_house_number, rep_street_address,
                     investment_amount, tenure_days, currency,
@@ -31,7 +31,10 @@ export const investmentService = {
                     nok_name, nok_relationship, nok_address,
                     target_amount, rollover_option,
                     status, payment_reference,
-                    contribution_frequency, interest_rate
+                    contribution_frequency, interest_rate,
+                    entity_type, tin, business_nature, 
+                    is_authorized_rep, auth_rep_phone, directors, rc_number,
+                    company_profile_url, status_report_url
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17,
@@ -39,14 +42,15 @@ export const investmentService = {
                     $29, $30,
                     $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44,
                     'pending', $45,
-                    $46, $47
+                    $46, $47,
+                    $48, $49, $50, $51, $52, $53, $54, $55, $56
                 )
                 RETURNING *
             `;
 
             const values = [
                 customerId, data.investment_type,
-                data.company_name, data.company_address, data.date_of_incorporation, data.directors_are_pep,
+                data.company_name, data.business_address, data.incorp_date || data.date_of_incorporation, data.directors_are_pep,
                 data.rep_full_name, data.rep_phone_number, data.rep_bvn, data.rep_nin,
                 data.rep_state_of_origin, data.rep_state_of_residence, data.rep_house_number, data.rep_street_address,
                 data.investment_amount, data.tenure_days, data.currency,
@@ -71,7 +75,16 @@ export const investmentService = {
                 data.rollover_option || null,
                 data.payment_reference || null,
                 data.contribution_frequency || null,
-                data.interest_rate || null
+                data.interest_rate || null,
+                data.entity_type || 'INDIVIDUAL',
+                data.tin || null,
+                data.business_nature || null,
+                data.is_authorized_rep || false,
+                data.auth_rep_phone || null,
+                JSON.stringify(data.directors || []), // JSONB data
+                data.rc_number || null,
+                data.company_profile_url || null,
+                data.status_report_url || null
             ];
 
             const result = await client.query(query, values);
@@ -103,7 +116,17 @@ export const investmentService = {
     },
 
     getInvestmentById: async (id: number) => {
-        const result = await pool.query('SELECT * FROM investments WHERE id = $1', [id]);
+        const result = await pool.query(`
+            SELECT i.*, 
+                   c.full_name as customer_name, c.email as customer_email,
+                   ig.id as gift_id, ig.gift_message, ig.gift_amount,
+                   gc.full_name as gifter_name
+            FROM investments i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN investment_gifts ig ON i.id = ig.investment_id
+            LEFT JOIN customers gc ON ig.gifter_id = gc.id
+            WHERE i.id = $1
+        `, [id]);
         return result.rows[0];
     },
 
@@ -114,9 +137,14 @@ export const investmentService = {
 
     getAllInvestments: async () => {
         const result = await pool.query(`
-            SELECT i.*, c.full_name as customer_name, c.email as customer_email 
+            SELECT i.*, 
+                   c.full_name as customer_name, c.email as customer_email,
+                   CASE WHEN ig.id IS NOT NULL THEN true ELSE false END as is_gift,
+                   gc.full_name as gifter_name
             FROM investments i
             LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN investment_gifts ig ON i.id = ig.investment_id
+            LEFT JOIN customers gc ON ig.gifter_id = gc.id
             ORDER BY i.created_at DESC
         `);
         return result.rows;
