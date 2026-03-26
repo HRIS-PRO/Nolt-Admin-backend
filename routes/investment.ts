@@ -233,7 +233,7 @@ router.get('/verify-gift', isAuthenticated, async (req: any, res) => {
 router.get('/claim-gift/:token', async (req, res) => {
     try {
         const { token } = req.params;
-        const result = await pool.query('SELECT * FROM investment_gifts WHERE gift_token = $1 AND status = \'paid\'', [token]);
+        const result = await pool.query('SELECT * FROM investment_gifts WHERE gift_token = $1', [token]);
 
         if (result.rows.length === 0) {
             return res.status(404).json({ message: "Gift not found or already claimed" });
