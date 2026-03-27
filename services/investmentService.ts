@@ -34,7 +34,8 @@ export const investmentService = {
                     contribution_frequency, interest_rate,
                     entity_type, tin, business_nature, 
                     is_authorized_rep, auth_rep_phone, directors, rc_number,
-                    company_profile_url, status_report_url
+                    company_profile_url, status_report_url,
+                    is_minor_beneficiary, guardian_confirmed
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17,
@@ -43,7 +44,8 @@ export const investmentService = {
                     $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44,
                     'pending', $45,
                     $46, $47,
-                    $48, $49, $50, $51, $52, $53, $54, $55, $56
+                    $48, $49, $50, $51, $52, $53, $54, $55, $56,
+                    $57, $58
                 )
                 RETURNING *
             `;
@@ -84,7 +86,9 @@ export const investmentService = {
                 JSON.stringify(data.directors || []), // JSONB data
                 data.rc_number || null,
                 data.company_profile_url || null,
-                data.status_report_url || null
+                data.status_report_url || null,
+                data.is_minor_beneficiary || false,
+                data.guardian_confirmed || false
             ];
 
             const result = await client.query(query, values);
