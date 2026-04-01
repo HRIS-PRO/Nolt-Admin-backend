@@ -370,6 +370,19 @@ router.post('/loans', async (req, res) => {
                 return res.status(400).json({ message: "Govt ID, Work ID, and Payslip are mandatory." });
             }
 
+            // 0. Check for existing active loans with the same BVN
+            if (bvn) {
+                const activeLoanCheck = await pool.query(
+                    "SELECT id FROM loans WHERE bvn = $1 AND status NOT IN ('rejected') LIMIT 1",
+                    [bvn]
+                );
+                if (activeLoanCheck.rows.length > 0) {
+                    return res.status(400).json({
+                        message: `CUSTOMER EXISTS! A client with this BVN already has an active or pending loan.`
+                    });
+                }
+            }
+
             // Construct Full Name for Backward Compatibility
             const applicant_full_name = `${surname} ${first_name} ${middle_name || ''}`.trim();
 
