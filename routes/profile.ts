@@ -28,20 +28,17 @@ router.post('/verify-bvn', isAuthenticated, async (req: any, res) => {
         }
 
         console.log(`[Profile] Specialized BVN Lookup: ${bvn}`);
-        
+
         // 1. Check uniqueness: ensure no OTHER user has this BVN
         const existingProfile = await pool.query('SELECT user_id FROM user_profiles WHERE bvn = $1 AND user_id != $2', [bvn, req.user.id]);
         if (existingProfile.rows.length > 0) {
-            return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
-        }
-        
-        const existingCustomer = await pool.query('SELECT id FROM customers WHERE bvn = $1 AND id != $2', [bvn, req.user.id]);
-        if (existingCustomer.rows.length > 0) {
-            return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
+            return res.status(400).json({ success: false, message: "PROFILE EXISTS! This BVN is already registered to another account." });
         }
 
+
+
         const bvnData = await kycService.lookupBVN(bvn);
-        
+
         if (bvnData) {
             res.json({
                 success: true,
@@ -136,7 +133,7 @@ router.put('/', isAuthenticated, async (req: any, res) => {
         } = req.body;
 
         // 1. Validate mandatory fields
-        if (!first_name || !surname || !phone_number || !personal_email || !date_of_birth || 
+        if (!first_name || !surname || !phone_number || !personal_email || !date_of_birth ||
             !state_of_origin || !state_of_residence || !address) {
             return res.status(400).json({ success: false, message: "Missing required profile fields (Residential details are mandatory)" });
         }
@@ -147,17 +144,14 @@ router.put('/', isAuthenticated, async (req: any, res) => {
 
         if (bvn && bvn.length === 11) {
             console.log(`[Profile Update] Verifying Identity for BVN: ${bvn}`);
-            
+
             // 2.1 Check uniqueness: ensure no OTHER user has this BVN
             const existingProfile = await pool.query('SELECT user_id FROM user_profiles WHERE bvn = $1 AND user_id != $2', [bvn, userId]);
             if (existingProfile.rows.length > 0) {
-                return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
+                return res.status(400).json({ success: false, message: "PROFILE EXISTS! This BVN is already registered to another account." });
             }
-            
-            const existingCustomer = await pool.query('SELECT id FROM customers WHERE bvn = $1 AND id != $2', [bvn, userId]);
-            if (existingCustomer.rows.length > 0) {
-                return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
-            }
+
+
 
             try {
                 const bvnData = await kycService.lookupBVN(bvn);
@@ -172,8 +166,8 @@ router.put('/', isAuthenticated, async (req: any, res) => {
                         verificationRef = `PROFILE_VER_OK_${Date.now()}`;
                         console.log("[Profile Update] Identity Verified successfully.");
                     } else {
-                        return res.status(400).json({ 
-                            success: false, 
+                        return res.status(400).json({
+                            success: false,
                             message: `Identity Verification Failed: ${validation.details}`,
                             matches: validation.matches
                         });
