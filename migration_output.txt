@@ -1,0 +1,11 @@
+/home/divine-obinali/together/Nolt-Admin-backend/config/db.ts:7
+    throw new Error('DATABASE_URL is not set');
+          ^
+
+Error: DATABASE_URL is not set
+    at <anonymous> (/home/divine-obinali/together/Nolt-Admin-backend/config/db.ts:7:11)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.14.0

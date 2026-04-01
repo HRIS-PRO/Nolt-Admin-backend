@@ -28,6 +28,18 @@ router.post('/verify-bvn', isAuthenticated, async (req: any, res) => {
         }
 
         console.log(`[Profile] Specialized BVN Lookup: ${bvn}`);
+        
+        // 1. Check uniqueness: ensure no OTHER user has this BVN
+        const existingProfile = await pool.query('SELECT user_id FROM user_profiles WHERE bvn = $1 AND user_id != $2', [bvn, req.user.id]);
+        if (existingProfile.rows.length > 0) {
+            return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
+        }
+        
+        const existingCustomer = await pool.query('SELECT id FROM customers WHERE bvn = $1 AND id != $2', [bvn, req.user.id]);
+        if (existingCustomer.rows.length > 0) {
+            return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
+        }
+
         const bvnData = await kycService.lookupBVN(bvn);
         
         if (bvnData) {
@@ -135,6 +147,18 @@ router.put('/', isAuthenticated, async (req: any, res) => {
 
         if (bvn && bvn.length === 11) {
             console.log(`[Profile Update] Verifying Identity for BVN: ${bvn}`);
+            
+            // 2.1 Check uniqueness: ensure no OTHER user has this BVN
+            const existingProfile = await pool.query('SELECT user_id FROM user_profiles WHERE bvn = $1 AND user_id != $2', [bvn, userId]);
+            if (existingProfile.rows.length > 0) {
+                return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
+            }
+            
+            const existingCustomer = await pool.query('SELECT id FROM customers WHERE bvn = $1 AND id != $2', [bvn, userId]);
+            if (existingCustomer.rows.length > 0) {
+                return res.status(400).json({ success: false, message: "CUSTOMER EXISTS! This BVN is already registered to another account." });
+            }
+
             try {
                 const bvnData = await kycService.lookupBVN(bvn);
                 if (bvnData) {

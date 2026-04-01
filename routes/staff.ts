@@ -54,6 +54,27 @@ const isSuperAdmin = (req: any, res: any, next: any) => {
     return res.status(403).json({ message: "Access denied. Superadmin only." });
 };
 
+// Middleware to check if user is an authenticated staff
+const isStaff = (req: any, res: any, next: any) => {
+    if (req.isAuthenticated() && req.user.role !== 'customer') {
+        return next();
+    }
+    return res.status(401).json({ message: "Unauthorized. Staff access required." });
+};
+
+// Middleware to ensure user is logged in
+const isAuthenticated = (req: any, res: any, next: any) => {
+    if (req.isAuthenticated()) {
+        return next();
+    }
+    res.status(401).json({ message: "Unauthorized. Please login first." });
+};
+
+interface AuthRequest extends Request {
+    user?: any;
+}
+import { Request, Response } from 'express';
+
 /**
  * @swagger
  * /api/staff/invite:
@@ -845,10 +866,11 @@ router.get('/loans', async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-router.get('/investments', async (req, res) => {
+router.get('/investments', async (req: any, res) => {
     try {
         const { investmentService } = await import('../services/investmentService.js');
-        const investments = await investmentService.getAllInvestments();
+        const officerId = req.user?.role?.toLowerCase() === 'sales_officer' ? req.user.id : undefined;
+        const investments = await investmentService.getAllInvestments(officerId);
         res.json(investments);
     } catch (error) {
         console.error("Error fetching investments:", error);
@@ -877,10 +899,16 @@ router.get('/investments', async (req, res) => {
 router.get('/investments/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        if (!id || id === 'null' || isNaN(Number(id))) {
+            return res.status(400).json({ message: "Invalid investment ID format" });
+        }
         const query = `
-            SELECT i.*, c.full_name as customer_name, c.email as customer_email, c.avatar_url, c.is_active as customer_active
+            SELECT i.*, 
+                   c.full_name as customer_name, c.email as customer_email, c.avatar_url, c.is_active as customer_active,
+                   staff.full_name as officer_name, staff.email as officer_email, staff.avatar_url as officer_avatar
             FROM investments i
             LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN customers staff ON i.sales_officer_id = staff.id
             WHERE i.id = $1
         `;
         const result = await pool.query(query, [id]);
@@ -889,9 +917,123 @@ router.get('/investments/:id', async (req, res) => {
             return res.status(404).json({ message: "Investment not found" });
         }
 
-        res.json(result.rows[0]);
+        const investment = result.rows[0];
+
+        if (!investment.casa_account_number && investment.customer_id) {
+            const casaRes = await pool.query(`
+                SELECT casa_account_number 
+                FROM investments 
+                WHERE customer_id = $1 
+                  AND casa_account_number IS NOT NULL 
+                  AND casa_account_number != ''
+                ORDER BY created_at DESC 
+                LIMIT 1
+            `, [investment.customer_id]);
+            
+            if (casaRes.rows.length > 0) {
+                investment.suggested_casa_number = casaRes.rows[0].casa_account_number;
+            }
+        }
+
+        res.json(investment);
     } catch (error) {
         console.error("Error fetching investment details:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/{id}/activities:
+ *   get:
+ *     summary: Get activity timeline for an investment
+ *     tags: [Staff]
+ */
+router.get('/investments/:id/activities', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const activities = await pool.query(`
+            SELECT ia.*, c.full_name as user_name, c.email as user_email, c.role as user_role, c.avatar_url
+            FROM investment_activities ia
+            LEFT JOIN customers c ON ia.user_id = c.id
+            WHERE ia.investment_id = $1
+            ORDER BY ia.created_at DESC
+        `, [id]);
+        res.json(activities.rows);
+    } catch (error) {
+        console.error("Error fetching activities:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/{id}/assign:
+ *   patch:
+ *     summary: Reassign an investment to a different Sales Officer
+ *     tags: [Staff]
+ */
+router.patch('/investments/:id/assign', async (req, res) => {
+    const { id } = req.params;
+    const { sales_officer_id } = req.body;
+    // @ts-ignore
+    const user = req.user as any;
+
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+    // Permission Check: Sales Manager, Admin, Super Admin
+    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin'];
+    if (!allowedRoles.includes(user.role)) {
+        return res.status(403).json({ message: "Only Managers and Admins can reassign investments." });
+    }
+
+    if (!sales_officer_id) {
+        return res.status(400).json({ message: "Target Sales Officer ID is required." });
+    }
+
+    try {
+        const investmentResult = await pool.query('SELECT sales_officer_id, customer_id FROM investments WHERE id = $1', [id]);
+        const investment = investmentResult.rows[0];
+        if (!investment) return res.status(404).json({ message: "Investment not found" });
+
+        const officerResult = await pool.query('SELECT id, email, full_name FROM customers WHERE id = $1', [sales_officer_id]);
+        const newOfficer = officerResult.rows[0];
+        if (!newOfficer) return res.status(404).json({ message: "Target officer not found." });
+
+        if (investment.sales_officer_id === sales_officer_id) {
+            return res.json({ message: "Investment is already assigned to this officer." });
+        }
+
+        // Update Assignment
+        await pool.query(
+            'UPDATE investments SET sales_officer_id = $1, updated_at = NOW() WHERE id = $2',
+            [sales_officer_id, id]
+        );
+
+        // Log Activity
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata)
+             VALUES ($1, $2, 'reassign_officer', $3, $4)`,
+            [
+                id, user.id,
+                `Reassigned to ${newOfficer.full_name}`,
+                JSON.stringify({ from: investment.sales_officer_id, to: sales_officer_id, updatedBy: user.email })
+            ]
+        );
+
+        // Notify New Officer
+        try {
+            const custResult = await pool.query('SELECT full_name FROM customers WHERE id = $1', [investment.customer_id]);
+            const customerName = custResult.rows[0]?.full_name || 'Nolt Customer';
+            await zeptoService.sendInvestmentNotification([newOfficer.email], id, customerName, 'Assigned to you');
+        } catch (emailError) {
+            console.warn("Failed to send assignment notification:", emailError);
+        }
+
+        res.json({ message: `Investment reassigned to ${newOfficer.full_name}` });
+
+    } catch (error) {
+        console.error("Error reassigning investment:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -947,13 +1089,210 @@ router.put('/investments/:id/action', async (req, res) => {
                 SET stage = $1, status = $2, start_date = CURRENT_TIMESTAMP, maturity_date = CURRENT_TIMESTAMP + (tenure_days || ' days')::interval 
                 WHERE id = $3
             `, [newStage, newStatus, id]);
+
+            // If the investment is becoming active but casa_account_number is missing, alert the CX team.
+            if (!investment.casa_account_number) {
+                try {
+                    const cxRes = await pool.query(`SELECT email FROM staff WHERE role = 'customer_experience' AND is_active = true`);
+                    const cxEmails = cxRes.rows.map(r => r.email);
+                    if (cxEmails.length > 0) {
+                        const applicantName = investment.company_name || investment.rep_full_name || investment.customer_name || 'Individual';
+                        await zeptoService.sendCASARequestNotification(cxEmails, id, applicantName);
+                    }
+                } catch (emailErr) {
+                    console.error("Failed to sequence CASA email request:", emailErr);
+                }
+            }
+
         } else {
             await pool.query(`UPDATE investments SET stage = $1, status = $2 WHERE id = $3`, [newStage, newStatus, id]);
+        }
+
+        // Notify next stage role for Investments Pipeline
+        if (newStatus === 'pending' && investment.stage !== newStage) {
+            let roleToNotify = null;
+            if (newStage === 'compliance_review') roleToNotify = 'compliance';
+            else if (newStage === 'finance_review') roleToNotify = 'finance';
+
+            if (roleToNotify) {
+                try {
+                    const notifyRes = await pool.query(`SELECT email FROM customers WHERE role = $1 AND is_active = true`, [roleToNotify]);
+                    const emails = notifyRes.rows.map(r => r.email);
+                    if (emails.length > 0) {
+                        const applicantName = investment.company_name || investment.rep_full_name || investment.customer_name || 'Individual';
+                        await zeptoService.sendInvestmentNotification(emails, id, applicantName, `Action Required: Application awaiting ${newStage.replace('_', ' ')} approval.`);
+                    }
+                } catch (emailErr) {
+                    console.error("Failed to send stage notification email:", emailErr);
+                }
+            }
         }
 
         res.json({ message: `Investment successfully ${action}d to ${newStage}` });
     } catch (error) {
         console.error("Error updating investment action:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/{id}/finance-fields:
+ *   put:
+ *     summary: Update Finance specific fields for an investment (Interest and derived WHT)
+ */
+router.put('/investments/:id/finance-fields', isAuthenticated, isStaff, async (req: AuthRequest, res: Response) => {
+    try {
+        const { id } = req.params;
+        const role = req.user?.role?.toLowerCase();
+
+        if (role !== 'finance' && role !== 'super_admin' && role !== 'superadmin') {
+            return res.status(403).json({ message: "Only Finance can update these fields." });
+        }
+
+        const invRes = await pool.query('SELECT investment_amount, interest_rate, tenure_days, investment_type FROM investments WHERE id = $1', [id]);
+        if (invRes.rows.length === 0) return res.status(404).json({ message: 'Investment not found' });
+        
+        const inv = invRes.rows[0];
+        const principal = Number(inv.investment_amount) || 0;
+        const rate = Number(inv.interest_rate) || 0;
+        const tenureDays = Number(inv.tenure_days) || 0;
+        const type = inv.investment_type || '';
+
+        const inputInterest = Number(req.body.interest_amount) || 0;
+        let validInterest = 0;
+
+        const isSurge = type.includes('SURGE');
+        const isRiseOrVault = type.includes('RISE') || type.includes('VAULT');
+
+        if (inputInterest > 0) {
+            // Explicit manual override wins
+            validInterest = inputInterest;
+        } else if (isSurge) {
+            // Compound every 30 days
+            let balance = principal;
+            let daysRemaining = tenureDays;
+            let totalGrossInterest = 0;
+            
+            while (daysRemaining >= 30) {
+                const periodInterest = balance * (rate / 100) * (30 / 365);
+                const periodWht = periodInterest * 0.10;
+                totalGrossInterest += periodInterest;
+                balance += (periodInterest - periodWht);
+                daysRemaining -= 30;
+            }
+            if (daysRemaining > 0) {
+                const periodInterest = balance * (rate / 100) * (daysRemaining / 365);
+                const periodWht = periodInterest * 0.10;
+                totalGrossInterest += periodInterest;
+                balance += (periodInterest - periodWht);
+            }
+            validInterest = totalGrossInterest;
+        } else if (isRiseOrVault) {
+            // Simple interest
+            validInterest = principal * (rate / 100) * (tenureDays / 365);
+        } else {
+            // Base fallback
+            validInterest = principal * (rate / 100) * (tenureDays / 365);
+        }
+
+        validInterest = Math.round(validInterest * 100) / 100;
+        const wht_amount = Math.round(validInterest * 0.10 * 100) / 100;
+
+        await pool.query(
+            `UPDATE investments SET interest_amount = $1, wht_amount = $2 WHERE id = $3`,
+            [validInterest, wht_amount, id]
+        );
+
+        res.json({ message: "Finance fields safely processed and updated", interest_amount: validInterest, wht_amount });
+    } catch (error) {
+        console.error("Error updating finance fields:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/{id}/casa:
+ *   put:
+ *     summary: Update CASA Account Number for an investment
+ */
+router.put('/investments/:id/casa', isAuthenticated, isStaff, async (req: AuthRequest, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { casa_account_number } = req.body;
+
+        if (!casa_account_number) {
+            return res.status(400).json({ message: "CASA Account Number is required." });
+        }
+
+        const invRes = await pool.query(
+            `UPDATE investments SET casa_account_number = $1 WHERE id = $2 RETURNING *`,
+            [casa_account_number, id]
+        );
+
+        if (invRes.rows.length === 0) {
+            return res.status(404).json({ message: "Investment not found." });
+        }
+
+        // Fetch investment with customer details to ensure email availability
+        const detailedInvRes = await pool.query(`
+            SELECT i.*, c.full_name as cust_name, c.email as cust_email
+            FROM investments i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            WHERE i.id = $1
+        `, [id]);
+        
+        const investment = detailedInvRes.rows[0];
+
+        console.log(`[CASA Update] Investment ID: ${id}. Current Status: ${investment.status}. CASA: ${casa_account_number}`);
+
+        // If investment is currently active, fire the certificate immediately
+        if (investment.status === 'active') {
+            try {
+                const customerName = investment.cust_name || investment.company_name || investment.rep_full_name || investment.customer_name || 'Individual';
+                
+                // Construct Date Strings
+                const valDate = new Date(investment.start_date || investment.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                const matDate = new Date(investment.maturity_date || Date.now() + 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                
+                const principal = Number(investment.investment_amount || 0);
+                const interestAmt = Number(investment.interest_amount || 0);
+                const whtAmt = Number(investment.wht_amount || 0);
+                const maturityValue = principal + interestAmt - whtAmt;
+
+                const emailToSend = investment.cust_email || investment.customer_email || 'example@noltfinance.com';
+                
+                console.log(`[Cert Trigger] Attempting to send certificate to: ${emailToSend} (Customer: ${customerName})`);
+
+                const principalStr = principal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const interestAmtStr = interestAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const whtAmtStr = whtAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const maturityValueStr = maturityValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                const emailResult = await zeptoService.sendInvestmentCertificateWithCASA(emailToSend, customerName, casa_account_number, {
+                    principal: principalStr,
+                    tenure: investment.tenure_days || 0,
+                    interestRate: investment.interest_rate || 0,
+                    valueDate: valDate,
+                    maturityDate: matDate,
+                    interestAmount: interestAmtStr,
+                    whtAmount: whtAmtStr,
+                    maturityValue: maturityValueStr
+                });
+
+                console.log(`[Cert Trigger] Certificate dispatch successful for ${id}. Result:`, emailResult);
+
+            } catch (certError) {
+                console.error("[Cert Trigger Error] Failed to sequence Certificate emission after CASA save:", certError);
+            }
+        } else {
+            console.log(`[CASA Update] Investment ${id} status is NOT 'active' (Actual: '${investment.status}'). Skipping certificate email.`);
+        }
+
+        res.json({ message: "CASA Account Number set successfully.", casa_account_number });
+    } catch (error) {
+        console.error("Error updating CASA fields:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -2896,6 +3235,123 @@ router.get('/assigned-loans', async (req, res) => {
             message: "Error fetching assigned loans.",
             details: error.message
         });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/{id}/liquidate-action:
+ *   post:
+ *     summary: Progress a liquidation request based on admin role
+ *     tags: [Investments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               action: { type: string, enum: [APPROVE, REJECT] }
+ *               note: { type: string }
+ */
+router.post('/investments/:id/liquidate-action', isStaff, async (req: any, res: any) => {
+    try {
+        const id = parseInt(req.params.id);
+        const { action, note } = req.body;
+        const role = req.user.role.toLowerCase();
+
+        if (isNaN(id)) return res.status(400).json({ message: "Invalid ID" });
+        if (!['APPROVE', 'REJECT'].includes(action)) return res.status(400).json({ message: "Invalid action" });
+
+        const invRes = await pool.query('SELECT * FROM investments WHERE id = $1', [id]);
+        if (invRes.rows.length === 0) return res.status(404).json({ message: "Investment not found" });
+
+        const inv = invRes.rows[0];
+
+        if (!inv.is_liquidating) {
+            return res.status(400).json({ message: "This investment does not have an active liquidation request." });
+        }
+
+        // Validate role against current stage
+        const stage = inv.liquidation_stage;
+
+        if (action === 'REJECT') {
+            await pool.query(
+                `UPDATE investments SET is_liquidating = false, liquidation_stage = null WHERE id = $1`, [id]
+            );
+            return res.json({ success: true, message: `Liquidation request rejected by ${role}` });
+        }
+
+        let nextStage = '';
+        if (stage === 'customer_experience') {
+            if (role !== 'super_admin' && role !== 'customer_experience') return res.status(403).json({ message: "Only CX can approve this stage." });
+            nextStage = 'internal_audit';
+        } else if (stage === 'internal_audit') {
+            if (role !== 'super_admin' && role !== 'internal_audit') return res.status(403).json({ message: "Only Audit can approve this stage." });
+            
+            // Branching Logic for MD
+            const rawAmount = Number(inv.liquidation_requested_amount);
+            if (rawAmount > 1000000) {
+                nextStage = 'md';
+            } else {
+                nextStage = 'finance';
+            }
+        } else if (stage === 'md') {
+            if (role !== 'super_admin' && role !== 'md') return res.status(403).json({ message: "Only MD can approve this stage." });
+            nextStage = 'finance';
+        } else if (stage === 'finance') {
+            if (role !== 'super_admin' && role !== 'finance') return res.status(403).json({ message: "Only Finance can approve this stage." });
+            
+            // FINAL EXECUTION
+            const requested = Number(inv.liquidation_requested_amount);
+            const penalty = Number(inv.liquidation_penalty_amount || 0);
+            const totalDeduction = requested + penalty;
+
+            const remainingBalance = Number(inv.investment_amount) - totalDeduction;
+            let finalStatus = inv.status;
+
+            if (inv.liquidation_type === 'FULL' || remainingBalance <= 0) {
+                finalStatus = 'liquidated';
+            }
+
+            await pool.query(
+                `UPDATE investments 
+                 SET investment_amount = GREATEST($1, 0),
+                     is_liquidating = false,
+                     liquidation_stage = 'completed',
+                     status = $2
+                 WHERE id = $3`,
+                [remainingBalance, finalStatus, id]
+            );
+
+            return res.json({ success: true, message: "Liquidation fully processed and finalized." });
+        } else {
+            return res.status(400).json({ message: "Invalid liquidation stage." });
+        }
+
+        // Move to next stage
+        await pool.query(
+            `UPDATE investments SET liquidation_stage = $1 WHERE id = $2`, [nextStage, id]
+        );
+
+        // Notify next stage role for Liquidation Pipeline
+        if (nextStage) {
+            try {
+                const notifyRes = await pool.query(`SELECT email FROM customers WHERE role = $1 AND is_active = true`, [nextStage]);
+                const emails = notifyRes.rows.map(r => r.email);
+                if (emails.length > 0) {
+                    const applicantName = inv.company_name || inv.rep_full_name || inv.customer_name || 'Individual';
+                    await zeptoService.sendInvestmentNotification(emails, id.toString(), applicantName, `Liquidation Workflow: Awaiting ${nextStage.replace(/_/g, ' ')} approval.`);
+                }
+            } catch (emailErr) {
+                console.error("Failed to send liquidation stage notification:", emailErr);
+            }
+        }
+
+        res.json({ success: true, message: `Liquidation approved and moved to ${nextStage}` });
+    } catch (error: any) {
+        console.error("Liquidation Action Error:", error);
+        res.status(500).json({ message: "Internal server error" });
     }
 });
 

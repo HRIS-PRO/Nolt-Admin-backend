@@ -285,4 +285,113 @@ router.get('/:id', isAuthenticated, async (req: any, res, next) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/investments/{id}/liquidate:
+ *   post:
+ *     summary: Request liquidation for an investment
+ *     tags: [Investments]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               liquidation_type: { type: string, enum: [FULL, CUSTOM] }
+ *               amount: { type: number }
+ *     responses:
+ *       200:
+ *         description: Liquidation requested successfully
+ *       400:
+ *         description: Bad request
+ */
+router.post('/:id/liquidate', isAuthenticated, async (req: any, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const { liquidation_type, amount } = req.body;
+        const userId = req.user.id;
+
+        if (isNaN(id)) return res.status(400).json({ message: "Invalid ID" });
+        if (!['FULL', 'CUSTOM'].includes(liquidation_type)) return res.status(400).json({ message: "Invalid liquidation type" });
+
+        // Get the investment to validate ownership and status
+        const investmentResult = await pool.query('SELECT * FROM investments WHERE id = $1', [id]);
+        if (investmentResult.rows.length === 0) {
+            return res.status(404).json({ message: "Investment not found" });
+        }
+
+        const investment = investmentResult.rows[0];
+
+        if (investment.customer_id !== userId) {
+            return res.status(403).json({ message: "Forbidden" });
+        }
+
+        if (investment.is_liquidating) {
+            return res.status(400).json({ message: "A liquidation request is already processing for this investment." });
+        }
+
+        if (['liquidated', 'rejected', 'pending_payment'].includes(investment.status)) {
+            return res.status(400).json({ message: `Cannot liquidate investment in ${investment.status} status.` });
+        }
+
+        // Calculate actual liquidation amount
+        let requestAmount = 0;
+        if (liquidation_type === 'FULL') {
+            requestAmount = Number(investment.investment_amount); // Ideally includes interest over time, simplified here
+        } else {
+            requestAmount = Number(amount);
+            if (isNaN(requestAmount) || requestAmount <= 0) {
+                return res.status(400).json({ message: "Invalid custom amount" });
+            }
+            if (requestAmount > Number(investment.investment_amount)) {
+                return res.status(400).json({ message: "Requested amount exceeds investment balance" });
+            }
+        }
+
+        // Check for early penalty (if current date < maturity date)
+        // Since we don't have a direct maturity_date column, we might compute it or assume there's a tenure_days.
+        // Let's compute maturity date = created_at + tenure_days
+        let isEarly = false;
+        let penaltyAmount = 0;
+        
+        const createdDate = new Date(investment.created_at);
+        const tenureMs = (investment.tenure_days || 0) * 24 * 60 * 60 * 1000;
+        const maturityDate = new Date(createdDate.getTime() + tenureMs);
+
+        if (new Date() < maturityDate) {
+            isEarly = true;
+            penaltyAmount = requestAmount * 0.10; // 10% penalty
+        }
+
+        // Mutate the record
+        const updateQuery = `
+            UPDATE investments
+            SET is_liquidating = true,
+                liquidation_type = $1,
+                liquidation_requested_amount = $2,
+                liquidation_penalty_amount = $3,
+                liquidation_stage = 'customer_experience'
+            WHERE id = $4
+            RETURNING *;
+        `;
+        const updated = await pool.query(updateQuery, [liquidation_type, requestAmount, penaltyAmount, id]);
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Liquidation requested successfully. It is now being processed.",
+            data: updated.rows[0]
+        });
+
+    } catch (error: any) {
+        console.error("Liquidation Request Error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;
