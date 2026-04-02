@@ -4,9 +4,9 @@ dotenv.config();
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-async function check() {
-    const res = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'investment_documents';");
+async function find() {
+    const res = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_name LIKE '%invest%';");
     console.log(res.rows);
     process.exit(0);
 }
-check();
+find();
