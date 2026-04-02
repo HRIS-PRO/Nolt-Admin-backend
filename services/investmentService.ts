@@ -105,8 +105,19 @@ export const investmentService = {
 
             // 1. Referral Logic
             let assignedOfficerId = null;
-            if (data.referral_code) {
-                const referrerResult = await client.query('SELECT id FROM customers WHERE referral_code = $1', [data.referral_code]);
+            let effectiveReferralCode = data.referral_code;
+
+            // If no referral code provided in this request, check if the customer used one during signup/marketing
+            if (!effectiveReferralCode) {
+                const marketingResult = await client.query('SELECT referral_code FROM marketing WHERE customer_id = $1 ORDER BY id DESC LIMIT 1', [customerId]);
+                if (marketingResult.rows[0]?.referral_code) {
+                    effectiveReferralCode = marketingResult.rows[0].referral_code;
+                    console.log(`[Referral] Found signup referral code for customer ${customerId}: ${effectiveReferralCode}`);
+                }
+            }
+
+            if (effectiveReferralCode) {
+                const referrerResult = await client.query('SELECT id FROM customers WHERE referral_code = $1', [effectiveReferralCode]);
                 if (referrerResult.rows[0]) {
                     assignedOfficerId = referrerResult.rows[0].id;
                 }
@@ -128,7 +139,7 @@ export const investmentService = {
 
             // Update assigned values in array
             values[62] = assignedOfficerId;
-            values[63] = data.referral_code || null;
+            values[63] = effectiveReferralCode || null;
 
             // Generate Indemnity Document if signatures exist
             let indemnityUrl = null;
@@ -162,8 +173,8 @@ export const investmentService = {
                     [
                         investment.id, 
                         null, 
-                        `Assigned to Sales Officer via ${data.referral_code ? 'referral code' : 'round robin'}`,
-                        JSON.stringify({ sales_officer_id: assignedOfficerId, referral_code: data.referral_code || null })
+                        `Assigned to Sales Officer via ${effectiveReferralCode ? 'referral code' : 'round robin'}`,
+                        JSON.stringify({ sales_officer_id: assignedOfficerId, referral_code: effectiveReferralCode || null })
                     ]
                 );
 

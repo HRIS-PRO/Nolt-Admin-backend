@@ -388,11 +388,20 @@ router.post('/loans', async (req, res) => {
 
             // Auto-assign Sales Officer
             let assignedOfficerId = null;
+            let effectiveReferralCode = referral_code;
 
-            if (referral_code) {
+            // If no referral code provided in this request, check if the customer used one during signup/marketing
+            if (!effectiveReferralCode) {
+                const marketingResult = await pool.query('SELECT referral_code FROM marketing WHERE customer_id = $1 ORDER BY id DESC LIMIT 1', [customerId]);
+                if (marketingResult.rows[0]?.referral_code) {
+                    effectiveReferralCode = marketingResult.rows[0].referral_code;
+                    console.log(`[Referral] Found signup referral code for loan customer ${customerId}: ${effectiveReferralCode}`);
+                }
+            }
+
+            if (effectiveReferralCode) {
                 // 1. Try to find officer by referral code
-                // Note: Referral code is unique in customers table
-                const referrerResult = await pool.query('SELECT id FROM customers WHERE referral_code = $1', [referral_code]);
+                const referrerResult = await pool.query('SELECT id FROM customers WHERE referral_code = $1', [effectiveReferralCode]);
                 const referrer = referrerResult.rows[0];
                 if (referrer) {
                     assignedOfficerId = referrer.id;
@@ -468,7 +477,7 @@ router.post('/loans', async (req, res) => {
                     work_id_url || null, payslip_url || null,
                     references ? JSON.stringify(references) : null,
                     requested_loan_amount || 0, loan_tenure_months || 0, signatures || null,
-                    mda_tertiary || null, ippis_number || null, staff_id || null, referral_code || null, eligible_amount || 0,
+                    mda_tertiary || null, ippis_number || null, staff_id || null, effectiveReferralCode || null, eligible_amount || 0,
                     bank_name || null, account_number || null, account_name || null,
                     assignedOfficerId
                 ]
