@@ -1,5 +1,6 @@
 import pool from '../config/db.js';
 import { zeptoService } from './zeptoService.js';
+import { pdfService } from './pdfService.js';
 
 interface CorporateInvestmentPayload {
     investment_type: 'NOLT_RISE' | 'NOLT_VAULT' | 'NOLT_SURGE';
@@ -37,7 +38,7 @@ export const investmentService = {
                     company_profile_url, status_report_url,
                     is_minor_beneficiary, guardian_confirmed,
                     is_top_up, original_investment_id, casa_account_number,
-                    sales_officer_id, referral_code
+                    sales_officer_id, referral_code, indemnity_document_url
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17,
@@ -49,7 +50,7 @@ export const investmentService = {
                     $48, $49, $50, $51, $52, $53, $54, $55, $56, $57,
                     $58, $59,
                     $60, $61, $62,
-                    $63, $64
+                    $63, $64, $65
                 )
                 RETURNING *
             `;
@@ -98,7 +99,8 @@ export const investmentService = {
                 data.original_investment_id || null,
                 data.casa_account_number || null,
                 null, // placeholder for sales_officer_id
-                data.referral_code || null
+                data.referral_code || null,
+                null // placeholder for indemnity_document_url
             ];
 
             // 1. Referral Logic
@@ -127,6 +129,27 @@ export const investmentService = {
             // Update assigned values in array
             values[62] = assignedOfficerId;
             values[63] = data.referral_code || null;
+
+            // Generate Indemnity Document if signatures exist
+            let indemnityUrl = null;
+            if (data.signatures && data.signatures.length > 0) {
+                // Fetch customer details
+                const customerResult = await client.query('SELECT full_name, email FROM customers WHERE id = $1', [customerId]);
+                if (customerResult.rows[0]) {
+                    const customer = customerResult.rows[0];
+                    const fullName = data.rep_full_name || customer.full_name;
+                    indemnityUrl = await pdfService.generateAndUploadIndemnityPdf(
+                        fullName,
+                        customer.email,
+                        '', // alternate email (optional)
+                        new Date().toLocaleDateString('en-GB'),
+                        data.investment_type,
+                        data.signatures[0],
+                        Date.now() + "_" + customerId // Use timestamp for unique id before investment ID is generated
+                    );
+                }
+            }
+            values[64] = indemnityUrl;
 
             const result = await client.query(query, values);
             const investment = result.rows[0];

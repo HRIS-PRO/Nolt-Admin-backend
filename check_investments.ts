@@ -5,7 +5,7 @@ dotenv.config();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 async function check() {
-    const res = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'investment_documents';");
+    const res = await pool.query("SELECT * FROM investments LIMIT 1;");
     console.log(res.rows);
     process.exit(0);
 }

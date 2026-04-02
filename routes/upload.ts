@@ -63,6 +63,8 @@ router.post('/', upload.single('file'), async (req, res) => {
         const contextType = loan_id ? 'loan' : 'investment';
         const contextId = loan_id || investment_id;
 
+        console.log(`[UPLOAD DEBUG] User ${userId} (${userRole}), context: ${contextId}, type: ${contextType}, docType: ${document_type}`);
+
         // Generate a unique path: {context}_{id}/{timestamp}_{filename}
         const timestamp = Date.now();
         const safeFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
