@@ -4,6 +4,7 @@ import { zeptoService as resendService, zeptoService } from '../services/zeptoSe
 import { exportService } from '../services/exportService.js';
 import bcrypt from 'bcrypt';
 import multer from 'multer';
+import { pdfService } from '../services/pdfService.js';
 
 import { getIO } from '../socket.js';
 
@@ -580,6 +581,639 @@ router.get('/loans/timeline-report', async (req, res) => {
  * @swagger
  * /api/staff/loans/timeline-report/export-csv:
  *   get:
+ *     summary: Export loan timeline report to CSV
+ *     tags: [Staff]
+ */
+router.get('/loans/timeline-report/export-csv', async (req, res) => {
+    // @ts-ignore
+    const user = req.user as any;
+    if (!user || (user.role !== 'customer_experience' && user.role !== 'super_admin' && user.role !== 'superadmin')) {
+        return res.status(403).json({ message: "Forbidden. Only Customer Experience and Super Admins can access." });
+    }
+
+    try {
+        const { search = '' } = req.query;
+
+        let baseQuery = `
+            SELECT l.id, l.applicant_full_name, l.requested_loan_amount, l.loan_type, l.product_type, l.status, l.stage, c.full_name as officer_name
+            FROM loans l
+            LEFT JOIN customers c ON l.sales_officer_id = c.id
+        `;
+        const filters: string[] = [];
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (search) {
+            filters.push(`(l.applicant_full_name ILIKE $${paramIndex} OR CAST(l.id AS TEXT) ILIKE $${paramIndex})`);
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        if (filters.length > 0) {
+            baseQuery += ` WHERE ` + filters.join(' AND ');
+        }
+
+        baseQuery += ` ORDER BY l.created_at DESC`;
+
+        const loansResult = await pool.query(baseQuery, params);
+        const loans = loansResult.rows;
+
+        if (loans.length === 0) {
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', 'attachment; filename="loan_timeline_report.csv"');
+            res.send('Reference,Loan Type,Product Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node,Return Reason\n');
+            return;
+        }
+
+        const loanIds = loans.map((l: any) => l.id);
+        const placeHolders = loanIds.map((_: any, i: number) => `$${i + 1}`).join(',');
+
+        const activitiesResult = await pool.query(`
+            SELECT loan_id, action_type, created_at, metadata, description
+            FROM loan_activities
+            WHERE loan_id IN (${placeHolders})
+            ORDER BY created_at ASC
+        `, loanIds);
+
+        const activitiesByLoan = activitiesResult.rows.reduce((acc: any, act: any) => {
+            if (!acc[act.loan_id]) acc[act.loan_id] = [];
+            acc[act.loan_id].push(act);
+            return acc;
+        }, {});
+
+        const reportData: any[] = [];
+        const now = new Date();
+
+        for (const loan of loans) {
+            const acts = activitiesByLoan[loan.id] || [];
+
+            let currentStageName = 'sales';
+            let currentStageEntry: Date | null = null;
+            let timeline: any[] = [];
+
+            const pushStage = (stageName: string, entry: Date, exit: Date | null, finalNodeAction?: string, returnReason?: string) => {
+                const endTime = exit || now;
+                const tatHours = (endTime.getTime() - entry.getTime()) / (1000 * 60 * 60);
+
+                let formattedStageName = stageName.replace(/_/g, ' ');
+                formattedStageName = formattedStageName.charAt(0).toUpperCase() + formattedStageName.slice(1);
+
+                timeline.push({
+                    reference: `LOAN-${loan.id}`,
+                    loanType: loan.loan_type === 'new' ? 'New Loan' : loan.loan_type === 'topup' ? 'Top-Up' : loan.loan_type === 'buy_over' ? 'Buy Over' : loan.loan_type,
+                    productType: loan.product_type || 'Public Sector Loan',
+                    amount: loan.requested_loan_amount,
+                    currentStatus: loan.status,
+                    salesOfficer: loan.officer_name || '-',
+                    initiator: loan.applicant_full_name,
+                    stageName: formattedStageName,
+                    entryTimestamp: entry.toISOString(),
+                    exitTimestamp: exit ? exit.toISOString() : '',
+                    tatHours: tatHours.toFixed(2),
+                    finalNode: finalNodeAction || '',
+                    returnReason: returnReason || ''
+                });
+            };
+
+            for (const act of acts) {
+                const actDate = new Date(act.created_at);
+
+                if (act.action_type === 'create_application') {
+                    currentStageEntry = actDate;
+                    currentStageName = 'sales';
+                } else if (['approve', 'return', 'reject'].includes(act.action_type)) {
+                    if (!currentStageEntry) currentStageEntry = actDate;
+
+                    let meta = null;
+                    try {
+                        meta = typeof act.metadata === 'string' ? JSON.parse(act.metadata) : act.metadata;
+                    } catch (e) { }
+
+                    const previousStage = meta?.from || currentStageName;
+                    const nextStage = meta?.to || 'unknown';
+
+                    pushStage(previousStage, currentStageEntry, actDate,
+                        act.action_type === 'approve' ? nextStage : (act.action_type === 'return' ? 'Returned' : 'Rejected'),
+                        act.action_type === 'return' ? (meta?.reason || 'See comments') : undefined
+                    );
+
+                    currentStageName = nextStage;
+                    currentStageEntry = actDate;
+                }
+            }
+
+            if (currentStageEntry && loan.status !== 'rejected') {
+                pushStage(currentStageName, currentStageEntry, null);
+            }
+
+            reportData.push(...timeline);
+        }
+
+        const headers = ["Reference", "Loan Type", "Product Type", "Amount", "Current Status", "Sales Officer", "Initiator", "Stage Name", "Stage Entry Timestamp", "Stage Exit Timestamp", "Stage TAT (Hours)", "Final Node", "Return Reason"];
+        const csvRows = reportData.map(row => [
+            row.reference,
+            row.loanType,
+            row.productType,
+            row.amount,
+            row.currentStatus,
+            row.salesOfficer,
+            row.initiator,
+            row.stageName,
+            row.entryTimestamp,
+            row.exitTimestamp,
+            row.tatHours,
+            row.finalNode,
+            row.returnReason
+        ].map(val => `"${val}"`).join(','));
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename="loan_timeline_report.csv"');
+        res.send([headers.join(','), ...csvRows].join('\n'));
+
+    } catch (error) {
+        console.error("Timeline export error:", error);
+        res.status(500).json({ message: "Error exporting timeline report" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/timeline-report:
+ *   get:
+ *     summary: Get timeline report of investment stages
+ *     tags: [Staff]
+ */
+router.get('/investments/timeline-report', async (req, res) => {
+    // @ts-ignore
+    const user = req.user as any;
+    if (!user || (user.role !== 'customer_experience' && user.role !== 'super_admin' && user.role !== 'superadmin')) {
+        return res.status(403).json({ message: "Forbidden. Only Customer Experience and Super Admins can access." });
+    }
+
+    try {
+        const { page = 1, limit = 10, search = '' } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+
+        let baseQuery = `
+            SELECT i.id, COALESCE(i.company_name, i.rep_full_name, c.full_name) as initiator, 
+                   i.investment_amount, i.investment_type, i.status, i.stage, staff.full_name as officer_name
+            FROM investments i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN customers staff ON i.sales_officer_id = staff.id
+        `;
+        const filters: string[] = [];
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (search) {
+            filters.push(`(COALESCE(i.company_name, i.rep_full_name, c.full_name) ILIKE $${paramIndex} OR CAST(i.id AS TEXT) ILIKE $${paramIndex})`);
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        if (filters.length > 0) {
+            baseQuery += ` WHERE ` + filters.join(' AND ');
+        }
+
+        baseQuery += ` ORDER BY i.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+        params.push(limit, offset);
+
+        const invResult = await pool.query(baseQuery, params);
+        const investments = invResult.rows;
+
+        if (investments.length === 0) {
+            return res.json({
+                data: [],
+                meta: { total: 0, page: Number(page), limit: Number(limit) }
+            });
+        }
+
+        let countQuery = `SELECT COUNT(*) FROM investments`;
+        const countParams: any[] = [];
+        if (filters.length > 0) {
+            countQuery += ` WHERE ` + filters.join(' AND ');
+            countParams.push(`%${search}%`);
+        }
+        const countResult = await pool.query(countQuery, countParams);
+        const total = parseInt(countResult.rows[0].count, 10);
+
+        const ids = investments.map(i => i.id);
+        const activitiesResult = await pool.query(`
+            SELECT investment_id, action_type, created_at, metadata, description
+            FROM investment_activities
+            WHERE investment_id = ANY($1)
+            ORDER BY created_at ASC
+        `, [ids]);
+
+        const actsByInv = activitiesResult.rows.reduce((acc: any, act: any) => {
+            if (!acc[act.investment_id]) acc[act.investment_id] = [];
+            acc[act.investment_id].push(act);
+            return acc;
+        }, {});
+
+        const reportData: any[] = [];
+        const now = new Date();
+
+        for (const inv of investments) {
+            const acts = actsByInv[inv.id] || [];
+            let currentStageName = 'submitted';
+            let currentStageEntry: Date | null = null;
+            let timeline: any[] = [];
+
+            const pushStage = (stageName: string, entry: Date, exit: Date | null, finalNodeAction?: string) => {
+                const endTime = exit || now;
+                const tatHours = (endTime.getTime() - entry.getTime()) / (1000 * 60 * 60);
+
+                timeline.push({
+                    loanId: inv.id,
+                    loanType: inv.investment_type,
+                    productType: 'Investment',
+                    amount: inv.investment_amount,
+                    currentStatus: inv.status,
+                    initiator: inv.initiator,
+                    officerName: inv.officer_name || '-',
+                    stageName: stageName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+                    entryTimestamp: entry.toISOString(),
+                    exitTimestamp: exit ? exit.toISOString() : null,
+                    tatHours: tatHours.toFixed(2),
+                    finalNode: finalNodeAction || ''
+                });
+            };
+
+            for (const act of acts) {
+                const actDate = new Date(act.created_at);
+                if (act.action_type === 'create' || act.action_type === 'create_application') {
+                    currentStageEntry = actDate;
+                    currentStageName = 'submitted';
+                } else if (['approve', 'reject'].includes(act.action_type)) {
+                    if (!currentStageEntry) currentStageEntry = actDate;
+                    let meta = null;
+                    try {
+                        meta = typeof act.metadata === 'string' ? JSON.parse(act.metadata) : act.metadata;
+                    } catch (e) { }
+                    const prev = meta?.old_stage || currentStageName;
+                    const next = meta?.new_stage || 'unknown';
+                    pushStage(prev, currentStageEntry, actDate, act.action_type === 'approve' ? next : 'Rejected');
+                    currentStageName = next;
+                    currentStageEntry = actDate;
+                }
+            }
+
+            if (currentStageEntry && inv.status !== 'rejected' && inv.status !== 'active') {
+                pushStage(currentStageName, currentStageEntry, null);
+            }
+
+            reportData.push(...timeline);
+        }
+
+        res.json({
+            data: reportData.reverse(),
+            meta: { total, page: Number(page), limit: Number(limit) }
+        });
+
+    } catch (error) {
+        console.error("Investment timeline error:", error);
+        res.status(500).json({ message: "Error fetching investment timeline" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/investments/timeline-report/export-csv:
+ *   get:
+ *     summary: Export investment timeline report to CSV
+ *     tags: [Staff]
+ */
+router.get('/investments/timeline-report/export-csv', async (req, res) => {
+    // @ts-ignore
+    const user = req.user as any;
+    if (!user || (user.role !== 'customer_experience' && user.role !== 'super_admin' && user.role !== 'superadmin')) {
+        return res.status(403).json({ message: "Forbidden" });
+    }
+
+    try {
+        const { search = '' } = req.query;
+
+        let baseQuery = `
+            SELECT i.id, COALESCE(i.company_name, i.rep_full_name, c.full_name) as initiator, 
+                   i.investment_amount, i.investment_type, i.status, i.stage, staff.full_name as officer_name
+            FROM investments i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN customers staff ON i.sales_officer_id = staff.id
+        `;
+        const filters: string[] = [];
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (search) {
+            filters.push(`(COALESCE(i.company_name, i.rep_full_name, c.full_name) ILIKE $${paramIndex} OR CAST(i.id AS TEXT) ILIKE $${paramIndex})`);
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        if (filters.length > 0) baseQuery += ` WHERE ` + filters.join(' AND ');
+        baseQuery += ` ORDER BY i.created_at DESC`;
+
+        const invResult = await pool.query(baseQuery, params);
+        const investments = invResult.rows;
+
+        if (investments.length === 0) {
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', 'attachment; filename="investment_timeline_report.csv"');
+            res.send('Reference,Investment Type,Amount,Current Status,Sales Officer,Initiator,Stage Name,Stage Entry Timestamp,Stage Exit Timestamp,Stage TAT (Hours),Final Node\n');
+            return;
+        }
+
+        const ids = investments.map(i => i.id);
+        const actsRes = await pool.query(`
+            SELECT investment_id, action_type, created_at, metadata, description
+            FROM investment_activities
+            WHERE investment_id = ANY($1)
+            ORDER BY created_at ASC
+        `, [ids]);
+
+        const actsByInv = actsRes.rows.reduce((acc: any, act: any) => {
+            if (!acc[act.investment_id]) acc[act.investment_id] = [];
+            acc[act.investment_id].push(act);
+            return acc;
+        }, {});
+
+        const reportData: any[] = [];
+        const now = new Date();
+
+        for (const inv of investments) {
+            const acts = actsByInv[inv.id] || [];
+            let currentStageName = 'submitted';
+            let currentStageEntry: Date | null = null;
+            let timeline: any[] = [];
+
+            const pushStage = (stageName: string, entry: Date, exit: Date | null, finalNodeAction?: string) => {
+                const endTime = exit || now;
+                const tatHours = (endTime.getTime() - entry.getTime()) / (1000 * 60 * 60);
+
+                timeline.push({
+                    reference: `INV-${inv.id}`,
+                    investmentType: inv.investment_type,
+                    amount: inv.investment_amount,
+                    currentStatus: inv.status,
+                    salesOfficer: inv.officer_name || '-',
+                    initiator: inv.initiator,
+                    stageName: stageName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+                    entryTimestamp: entry.toISOString(),
+                    exitTimestamp: exit ? exit.toISOString() : '',
+                    tatHours: tatHours.toFixed(2),
+                    finalNode: finalNodeAction || ''
+                });
+            };
+
+            for (const act of acts) {
+                const actDate = new Date(act.created_at);
+                if (act.action_type === 'create' || act.action_type === 'create_application') {
+                    currentStageEntry = actDate;
+                    currentStageName = 'submitted';
+                } else if (['approve', 'reject'].includes(act.action_type)) {
+                    if (!currentStageEntry) currentStageEntry = actDate;
+                    let meta = null;
+                    try {
+                        meta = typeof act.metadata === 'string' ? JSON.parse(act.metadata) : act.metadata;
+                    } catch (e) { }
+                    const prev = meta?.old_stage || currentStageName;
+                    const next = meta?.new_stage || 'unknown';
+                    pushStage(prev, currentStageEntry, actDate, act.action_type === 'approve' ? next : 'Rejected');
+                    currentStageName = next;
+                    currentStageEntry = actDate;
+                }
+            }
+
+            if (currentStageEntry && inv.status !== 'rejected' && inv.status !== 'active') {
+                pushStage(currentStageName, currentStageEntry, null);
+            }
+            reportData.push(...timeline);
+        }
+
+        const headers = ["Reference", "Investment Type", "Amount", "Current Status", "Sales Officer", "Initiator", "Stage Name", "Stage Entry Timestamp", "Stage Exit Timestamp", "Stage TAT (Hours)", "Final Node"];
+        const csvRows = reportData.map(row => [
+            row.reference,
+            row.investmentType,
+            row.amount,
+            row.currentStatus,
+            row.salesOfficer,
+            row.initiator,
+            row.stageName,
+            row.entryTimestamp,
+            row.exitTimestamp,
+            row.tatHours,
+            row.finalNode
+        ].map(val => `"${val}"`).join(','));
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename="investment_timeline_report.csv"');
+        res.send([headers.join(','), ...csvRows].join('\n'));
+
+    } catch (error) {
+        console.error("Investment export error:", error);
+        res.status(500).json({ message: "Error exporting investment timeline" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/reports/tat-summary:
+ *   get:
+ *     summary: Get overview statistics and TAT aggregates for reporting
+ *     tags: [Staff]
+ */
+router.get('/reports/tat-summary', async (req, res) => {
+    // @ts-ignore
+    const user = req.user as any;
+    if (!user || (user.role !== 'customer_experience' && user.role !== 'super_admin' && user.role !== 'superadmin')) {
+        return res.status(403).json({ message: "Forbidden" });
+    }
+
+    try {
+        const { type = 'LOAN' } = req.query; // 'LOAN' or 'INVESTMENT'
+        const isLoan = type === 'LOAN';
+
+        // 1. Fetch Basic Metrics
+        const table = isLoan ? 'loans' : 'investments';
+        const amountField = isLoan ? 'requested_loan_amount' : 'investment_amount';
+        const approvedStatus = isLoan ? 'disbursed' : 'active';
+
+        const metricsRes = await pool.query(`
+            SELECT 
+                COUNT(*) FILTER (WHERE status = $1) as approved_count,
+                COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
+                COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
+                SUM(${amountField}) FILTER (WHERE status IN ($1, 'pending')) as total_volume
+            FROM ${table}
+        `, [approvedStatus]);
+
+        const metrics = metricsRes.rows[0];
+
+        // 2. Aggregate Product Mix
+        const mixField = isLoan ? 'loan_type' : 'investment_type';
+        const mixRes = await pool.query(`
+            SELECT ${mixField} as type, COUNT(*) as count 
+            FROM ${table} 
+            GROUP BY ${mixField}
+        `);
+        const productMix = mixRes.rows.map(r => ({
+            name: r.type || 'Unknown',
+            value: parseInt(r.count)
+        }));
+
+        // 3. Fetch Average TAT and Performance (Last 200 applications)
+        const activityTable = isLoan ? 'loan_activities' : 'investment_activities';
+        const idField = isLoan ? 'loan_id' : 'investment_id';
+
+        const recentAppsRes = await pool.query(`
+            SELECT id, ${amountField} as amount, customer_id, created_at, ${isLoan ? 'loan_type' : 'status'} as sub_type
+            FROM ${table} 
+            ORDER BY created_at DESC 
+            LIMIT 200
+        `);
+        const recentApps = recentAppsRes.rows;
+        const recentIds = recentApps.map(r => r.id);
+
+        if (recentIds.length === 0) {
+            return res.json({
+                summary: {
+                    approved: parseInt(metrics.approved_count || '0'),
+                    pending: parseInt(metrics.pending_count || '0'),
+                    rejected: parseInt(metrics.rejected_count || '0'),
+                    totalVolume: parseFloat(metrics.total_volume || '0')
+                },
+                chartData: [],
+                productMix: [],
+                dailyApprovals: [],
+                performance: { fastest: [], slowest: [] },
+                stageVolume: []
+            });
+        }
+
+        const actsRes = await pool.query(`
+            SELECT ${idField} as app_id, action_type, created_at, metadata
+            FROM ${activityTable}
+            WHERE ${idField} = ANY($1)
+            ORDER BY created_at ASC
+        `, [recentIds]);
+
+        const stagesTAT: Record<string, number[]> = {};
+        const stageVolume: Record<string, number> = {};
+        const appPerformance: any[] = [];
+        const dailyApprovals: Record<string, { new: number, spillover: number }> = {};
+
+        const actsByApp = actsRes.rows.reduce((acc: any, act: any) => {
+            if (!acc[act.app_id]) acc[act.app_id] = [];
+            acc[act.app_id].push(act);
+            return acc;
+        }, {});
+
+        // Helper to get day string
+        const getDay = (date: Date) => date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+
+        for (const appId in actsByApp) {
+            const acts = actsByApp[appId];
+            const app = recentApps.find(a => a.id == appId);
+            let currentEntry: Date | null = null;
+            let currentStage: string | null = null;
+            let totalTatHours = 0;
+            let isFinalized = false;
+
+            for (const act of acts) {
+                const actDate = new Date(act.created_at);
+                
+                if (act.action_type === 'create_application' || act.action_type === 'create' || act.action_type === 'staff_application') {
+                    currentEntry = actDate;
+                    currentStage = isLoan ? 'sales' : 'submitted';
+                    if (!stageVolume[currentStage]) stageVolume[currentStage] = 0;
+                    stageVolume[currentStage]++;
+                } else if (['approve', 'return', 'reject', 'action'].includes(act.action_type)) {
+                    if (currentEntry && currentStage) {
+                        const tatHours = (actDate.getTime() - currentEntry.getTime()) / (1000 * 60 * 60);
+                        if (!stagesTAT[currentStage]) stagesTAT[currentStage] = [];
+                        stagesTAT[currentStage].push(tatHours);
+                        totalTatHours += tatHours;
+                    }
+                    
+                    let meta = null;
+                    try { meta = typeof act.metadata === 'string' ? JSON.parse(act.metadata) : act.metadata; } catch (e) {}
+                    const nextStage = isLoan ? (meta?.to || 'unknown') : (meta?.new_stage || 'unknown');
+                    
+                    if (nextStage !== 'unknown') {
+                        if (!stageVolume[nextStage]) stageVolume[nextStage] = 0;
+                        stageVolume[nextStage]++;
+                    }
+
+                    // Track daily approvals reaching final stage
+                    if (nextStage === 'finance' || nextStage === 'finance_stage' || (act.action_type === 'approve' && !isLoan)) {
+                        const day = getDay(actDate);
+                        if (!dailyApprovals[day]) dailyApprovals[day] = { new: 0, spillover: 0 };
+                        
+                        // Spillover logic: if created more than 48h before reaching finance
+                        const appCreated = new Date(app.created_at);
+                        const isSpillover = (actDate.getTime() - appCreated.getTime()) / (1000 * 60 * 60) > 48;
+                        if (isSpillover) dailyApprovals[day].spillover++;
+                        else dailyApprovals[day].new++;
+                        
+                        isFinalized = true;
+                    }
+
+                    currentStage = nextStage;
+                    currentEntry = actDate;
+                }
+            }
+
+            if (isFinalized && totalTatHours > 0) {
+                appPerformance.push({
+                    id: appId,
+                    ref: `${isLoan ? 'L' : 'I'}-${appId}`,
+                    name: `Customer #${app.customer_id}`, // Masked for GDPR, but could join user table as well
+                    amount: app.amount,
+                    tatHours: parseFloat(totalTatHours.toFixed(2)),
+                    type: app.sub_type || 'Standard',
+                    createdAt: app.created_at
+                });
+            }
+        }
+
+        const chartData = Object.entries(stagesTAT).map(([stage, hrs]) => ({
+            stage: stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+            avgHours: parseFloat((hrs.reduce((a, b) => a + b, 0) / hrs.length).toFixed(1))
+        }));
+
+        const stageVolumeData = Object.entries(stageVolume).map(([stage, count]) => ({
+            stage: stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+            passes: count
+        })).sort((a, b) => b.passes - a.passes);
+
+        const sortedPerformanceByTAT = [...appPerformance].sort((a, b) => a.tatHours - b.tatHours);
+        const fastest = sortedPerformanceByTAT.slice(0, 3);
+        const slowest = sortedPerformanceByTAT.slice(-3).reverse();
+
+        res.json({
+            summary: {
+                approved: parseInt(metrics.approved_count || '0'),
+                pending: parseInt(metrics.pending_count || '0'),
+                rejected: parseInt(metrics.rejected_count || '0'),
+                totalVolume: parseFloat(metrics.total_volume || '0')
+            },
+            chartData,
+            productMix,
+            dailyApprovals: Object.entries(dailyApprovals).map(([day, counts]) => ({ day, ...counts })),
+            performance: { fastest, slowest },
+            stageVolume: stageVolumeData
+        });
+
+    } catch (error) {
+        console.error("TAT summary error:", error);
+        res.status(500).json({ message: "Error calculating TAT summary" });
+    }
+});
+/**
+ * @swagger
+ * /api/staff/loans/timeline-report/export-csv:
+ *   get:
  *     summary: Export full timeline report as CSV
  *     tags: [Staff]
  *     responses:
@@ -931,7 +1565,7 @@ router.get('/investments/:id', async (req, res) => {
                 ORDER BY created_at DESC 
                 LIMIT 1
             `, [investment.customer_id]);
-            
+
             if (casaRes.rows.length > 0) {
                 investment.suggested_casa_number = casaRes.rows[0].casa_account_number;
             }
@@ -1042,6 +1676,74 @@ router.patch('/investments/:id/assign', async (req, res) => {
 
 /**
  * @swagger
+ * /api/staff/investments/{id}/indemnity:
+ *   post:
+ *     summary: Upload or generate an indemnity document for an investment
+ *     tags: [Staff]
+ */
+router.post('/investments/:id/indemnity', isStaff, async (req, res) => {
+    const { id } = req.params;
+    const { signature_base64, indemnity_document_url } = req.body;
+    // @ts-ignore
+    const user = req.user as any;
+
+    try {
+        let finalUrl = indemnity_document_url;
+
+        // If a signature is provided, generate the PDF
+        if (signature_base64 && !finalUrl) {
+            const invResult = await pool.query(`
+                SELECT i.*, c.full_name as customer_name, c.email as customer_email 
+                FROM investments i
+                JOIN customers c ON i.customer_id = c.id
+                WHERE i.id = $1
+            `, [id]);
+            const inv = invResult.rows[0];
+
+            if (!inv) return res.status(404).json({ message: "Investment not found" });
+
+            finalUrl = await pdfService.generateAndUploadIndemnityPdf(
+                inv.company_name || inv.rep_full_name || inv.customer_name,
+                inv.customer_email,
+                '', // alternate email
+                new Date().toLocaleDateString(),
+                inv.investment_type,
+                signature_base64,
+                id
+            );
+        }
+
+        if (!finalUrl) {
+            return res.status(400).json({ message: "No document or signature provided for indemnity." });
+        }
+
+        // Update Investment
+        await pool.query(
+            'UPDATE investments SET indemnity_document_url = $1, updated_at = NOW() WHERE id = $2',
+            [finalUrl, id]
+        );
+
+        // Log Activity
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata)
+             VALUES ($1, $2, 'indemnity_signed', $3, $4)`,
+            [
+                id, user.id,
+                'Indemnity agreement signed and uploaded',
+                JSON.stringify({ updatedBy: user.email, documentUrl: finalUrl })
+            ]
+        );
+
+        res.json({ message: "Indemnity document updated successfully", url: finalUrl });
+
+    } catch (error) {
+        console.error("Error processing indemnity:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
  * /api/staff/investments/{id}/action:
  *   put:
  *     summary: Approve or reject an investment to move it through the pipeline
@@ -1058,7 +1760,7 @@ router.put('/investments/:id/action', async (req, res) => {
         if (investmentRes.rows.length === 0) return res.status(404).json({ message: "Investment not found" });
 
         const investment = investmentRes.rows[0];
-        
+
         if (investment.status !== 'pending') {
             return res.status(400).json({ message: "Investment is no longer pending." });
         }
@@ -1119,10 +1821,10 @@ router.put('/investments/:id/action', async (req, res) => {
 
                     const customerName = upInv.cust_name || upInv.company_name || upInv.rep_full_name || upInv.customer_name || 'Individual';
                     const emailToSend = upInv.cust_email || upInv.customer_email || 'example@noltfinance.com';
-                    
+
                     const valDate = new Date(upInv.start_date || upInv.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                     const matDate = new Date(upInv.maturity_date || Date.now() + 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                    
+
                     const principal = Number(upInv.investment_amount || 0);
                     const interestAmt = Number(upInv.interest_amount || 0);
                     const whtAmt = Number(upInv.wht_amount || 0);
@@ -1158,7 +1860,7 @@ router.put('/investments/:id/action', async (req, res) => {
         await pool.query(
             `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
              VALUES ($1, $2, $3, $4, $5)`,
-            [id, user.id, action, `${action === 'approve'? 'Approved' : 'Rejected'} at ${investment.stage.replace(/_/g, ' ')}`, JSON.stringify({ old_stage: investment.stage, new_stage: newStage })]
+            [id, user.id, action, `${action === 'approve' ? 'Approved' : 'Rejected'} at ${investment.stage.replace(/_/g, ' ')}`, JSON.stringify({ old_stage: investment.stage, new_stage: newStage })]
         );
 
         // Notify next stage role for Investments Pipeline
@@ -1205,7 +1907,7 @@ router.put('/investments/:id/finance-fields', isAuthenticated, isStaff, async (r
 
         const invRes = await pool.query('SELECT investment_amount, interest_rate, tenure_days, investment_type FROM investments WHERE id = $1', [id]);
         if (invRes.rows.length === 0) return res.status(404).json({ message: 'Investment not found' });
-        
+
         const inv = invRes.rows[0];
         const principal = Number(inv.investment_amount) || 0;
         const rate = Number(inv.interest_rate) || 0;
@@ -1226,7 +1928,7 @@ router.put('/investments/:id/finance-fields', isAuthenticated, isStaff, async (r
             let balance = principal;
             let daysRemaining = tenureDays;
             let totalGrossInterest = 0;
-            
+
             while (daysRemaining >= 30) {
                 const periodInterest = balance * (rate / 100) * (30 / 365);
                 const periodWht = periodInterest * 0.10;
@@ -1307,7 +2009,7 @@ router.put('/investments/:id/casa', isAuthenticated, isStaff, async (req: AuthRe
             LEFT JOIN customers c ON i.customer_id = c.id
             WHERE i.id = $1
         `, [id]);
-        
+
         const investment = detailedInvRes.rows[0];
 
         console.log(`[CASA Update] Investment ID: ${id}. Current Status: ${investment.status}. CASA: ${casa_account_number}`);
@@ -1316,18 +2018,18 @@ router.put('/investments/:id/casa', isAuthenticated, isStaff, async (req: AuthRe
         if (investment.status === 'active') {
             try {
                 const customerName = investment.cust_name || investment.company_name || investment.rep_full_name || investment.customer_name || 'Individual';
-                
+
                 // Construct Date Strings
                 const valDate = new Date(investment.start_date || investment.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                 const matDate = new Date(investment.maturity_date || Date.now() + 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                
+
                 const principal = Number(investment.investment_amount || 0);
                 const interestAmt = Number(investment.interest_amount || 0);
                 const whtAmt = Number(investment.wht_amount || 0);
                 const maturityValue = principal + interestAmt - whtAmt;
 
                 const emailToSend = investment.cust_email || investment.customer_email || 'example@noltfinance.com';
-                
+
                 console.log(`[Cert Trigger] Attempting to send certificate to: ${emailToSend} (Customer: ${customerName})`);
 
                 const principalStr = principal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2931,18 +3633,18 @@ router.post('/investments/application', isStaff, async (req, res) => {
     req.body = sanitizePayload(req.body);
 
     const {
-        entity_type, 
-        email, phone, fullName, 
+        entity_type,
+        email, phone, fullName,
         selectedPlan, currency, amount, tenure_months,
         rollover_option, contribution_frequency, target_amount, interest_rate,
-        
+
         // Identity
         title, gender, dob, marital_status, religion, mother_maiden_name,
-        
+
         // Corporate
         companyName, rcNumber, businessAddress, businessNature, tin, directors,
         incorp_date,
-        
+
         // Address & NOK
         homeAddress, stateOfOrigin, stateOfResidence,
         nokName, nokRelationship, nokAddress,
@@ -2954,7 +3656,7 @@ router.post('/investments/application', isStaff, async (req, res) => {
         rep_id_url, kyc_docs_url, rep_selfie_url, payment_receipt_url,
         utility_bill_url, secondary_id_url, cac_url,
         company_profile_url, status_report_url, memart_url, annual_returns_url, board_resolution_url,
-        
+
         // Payment Source
         payment_method, payment_reference
     } = req.body;
@@ -2967,7 +3669,7 @@ router.post('/investments/application', isStaff, async (req, res) => {
         // 1. Resolve/Create Customer
         let customerId;
         const checkCustomer = await pool.query('SELECT id FROM customers WHERE email = $1 LIMIT 1', [email]);
-        
+
         if (checkCustomer.rows.length > 0) {
             customerId = checkCustomer.rows[0].id;
         } else {
@@ -3027,7 +3729,7 @@ router.post('/investments/application', isStaff, async (req, res) => {
                 NOW(), NOW()
             ) RETURNING id`,
             [
-                customerId, 
+                customerId,
                 officerId,
                 `NOLT_${selectedPlan}`, // Prefix required by check constraint
                 entity_type || 'INDIVIDUAL',
@@ -3038,7 +3740,7 @@ router.post('/investments/application', isStaff, async (req, res) => {
                 rollover_option || 'principal_interest', contribution_frequency || 'monthly',
                 interest_rate || 0,
                 payment_receipt_url ? 'compliance_review' : 'onboarding', // stage is $21
-                
+
                 title, gender, dob, mother_maiden_name, religion, marital_status,
                 nokName, nokRelationship, nokAddress,
                 target_amount || null, tin, businessNature, rcNumber,
@@ -3064,12 +3766,12 @@ router.post('/investments/application', isStaff, async (req, res) => {
             `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata)
              VALUES ($1, $2, 'staff_application', $3, $4)`,
             [
-                newInvestment.rows[0].id, 
+                newInvestment.rows[0].id,
                 officerId,
                 'Investment application created by staff',
-                JSON.stringify({ 
-                    amount: amount, 
-                    currency: currency, 
+                JSON.stringify({
+                    amount: amount,
+                    currency: currency,
                     plan: selectedPlan,
                     staff_id: officerId,
                     staff_role: userRole
@@ -3081,8 +3783,8 @@ router.post('/investments/application', isStaff, async (req, res) => {
         const io = getIO();
         io.emit('investment_new', { id: newInvestment.rows[0].id, customer_id: customerId });
 
-        res.status(201).json({ 
-            message: "Investment application created successfully", 
+        res.status(201).json({
+            message: "Investment application created successfully",
             investment_id: newInvestment.rows[0].id,
             account_status: checkCustomer.rows.length > 0 ? 'existing' : 'new_created'
         });
@@ -3585,7 +4287,7 @@ router.post('/investments/:id/liquidate-action', isStaff, async (req: any, res: 
             nextStage = 'internal_audit';
         } else if (stage === 'internal_audit') {
             if (role !== 'super_admin' && role !== 'internal_audit') return res.status(403).json({ message: "Only Audit can approve this stage." });
-            
+
             // Branching Logic for MD
             const rawAmount = Number(inv.liquidation_requested_amount);
             if (rawAmount > 1000000) {
@@ -3598,7 +4300,7 @@ router.post('/investments/:id/liquidate-action', isStaff, async (req: any, res: 
             nextStage = 'finance';
         } else if (stage === 'finance') {
             if (role !== 'super_admin' && role !== 'finance') return res.status(403).json({ message: "Only Finance can approve this stage." });
-            
+
             // FINAL EXECUTION
             const requested = Number(inv.liquidation_requested_amount);
             const penalty = Number(inv.liquidation_penalty_amount || 0);

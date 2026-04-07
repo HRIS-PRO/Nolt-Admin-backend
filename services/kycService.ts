@@ -27,6 +27,12 @@ interface ValidationResult {
     details: string;
 }
 
+interface FaceMatchResult {
+    success: boolean;
+    confidence: number;
+    message: string;
+}
+
 export const kycService = {
     lookupBVN: async (bvn: string): Promise<BVNData | null> => {
         try {
@@ -104,5 +110,37 @@ export const kycService = {
             matchCount,
             details
         };
+    },
+
+    verifyFaceMatch: async (bvn: string, selfieUrl: string): Promise<FaceMatchResult> => {
+        try {
+            console.log(`[KYC Service] Verifying Face Match for BVN: ${bvn} using Advanced Lookup`);
+            const response = await axios.post(`${ZEEH_BASE_URL}/nigeria_kyc/lookup_bvn_with_face`, 
+                { bvn, imageUrl: selfieUrl },
+                {
+                    headers: {
+                        'Secret_Key': ZEEH_SECRET_KEY,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            // Response structure: { success: true, data: { face_data: { confidence: 99.92, status: true, ... }, ... } }
+            if (response.data && response.data.success) {
+                const faceData = response.data.data?.face_data;
+                const confidence = faceData?.confidence || 0;
+                const status = faceData?.status || false;
+
+                return {
+                    success: status && confidence >= 70, // Industry standard threshold
+                    confidence,
+                    message: (status && confidence >= 70) ? "Face verification successful" : "Face does not match BVN record"
+                };
+            }
+            return { success: false, confidence: 0, message: response.data?.message || "Verification failed" };
+        } catch (error: any) {
+            console.error("[KYC Service] Face Match Error:", error.response?.data || error.message);
+            return { success: false, confidence: 0, message: error.response?.data?.message || "Internal verification error" };
+        }
     }
 };

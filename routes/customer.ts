@@ -572,4 +572,71 @@ router.get('/loans', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/customer/verify-identity:
+ *   post:
+ *     summary: Verify customer identity via BVN Face Match
+ *     tags: [Customers]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bvn, selfie_url]
+ *             properties:
+ *               bvn:
+ *                 type: string
+ *               selfie_url:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Identity verified successfully
+ *       400:
+ *         description: Verification failed
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/customer/verify-identity', async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+
+    try {
+        const { bvn, selfie_url } = req.body;
+        // @ts-ignore
+        const userId = req.user.id;
+
+        if (!bvn || !selfie_url) {
+            return res.status(400).json({ success: false, message: "BVN and Selfie URL are required" });
+        }
+
+        const { kycService } = await import('../services/kycService.js');
+        const verification = await kycService.verifyFaceMatch(bvn, selfie_url);
+
+        if (verification.success) {
+            await pool.query(
+                `UPDATE customers 
+                 SET last_selfie_verified_at = NOW(), 
+                     is_identity_verified = true 
+                 WHERE id = $1`,
+                [userId]
+            );
+            
+            // @ts-ignore
+            req.user.last_selfie_verified_at = new Date();
+            // @ts-ignore
+            req.user.is_identity_verified = true;
+
+            return res.json({ success: true, message: "Identity verified successfully", confidence: verification.confidence });
+        } else {
+            return res.status(400).json({ success: false, message: verification.message, confidence: verification.confidence });
+        }
+    } catch (error: any) {
+        console.error("Error verifying identity:", error);
+        res.status(500).json({ success: false, message: "Verification failed due to a system error" });
+    }
+});
+
 export default router;
