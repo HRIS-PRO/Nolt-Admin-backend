@@ -1,12 +1,19 @@
-import { Pool } from 'pg';
-import dotenv from 'dotenv';
-dotenv.config();
+import pool from './config/db.js';
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-async function check() {
-    const res = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'investment_documents';");
-    console.log(res.rows);
-    process.exit(0);
+async function checkSchema() {
+    try {
+        const res = await pool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'investments'
+        `);
+        console.log("Columns in 'investments' table:");
+        console.log(res.rows.map(r => r.column_name).join(', '));
+    } catch (err) {
+        console.error(err);
+    } finally {
+        process.exit();
+    }
 }
-check();
+
+checkSchema();

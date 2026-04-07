@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import pool from '../config/db.js';
 import { kycService } from '../services/kycService.js';
+import { paystackService } from '../services/paystackService.js';
 
 const router = Router();
 
@@ -57,6 +58,105 @@ router.post('/verify-bvn', isAuthenticated, async (req: any, res) => {
     } catch (error: any) {
         console.error("[Profile] Specialized BVN Lookup Error:", error);
         res.status(500).json({ success: false, message: error.message || "BVN verification failed" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/profile/banks:
+ *   get:
+ *     summary: Fetch list of supported banks
+ *     tags: [Profile]
+ */
+router.get('/banks', isAuthenticated, async (req: any, res) => {
+    try {
+        const banksResponse = await paystackService.getBanks();
+        if (banksResponse && banksResponse.status) {
+            res.json({ success: true, data: banksResponse.data });
+        } else {
+            res.status(400).json({ success: false, message: "Failed to fetch banks" });
+        }
+    } catch (error: any) {
+        console.error("[Profile] Get Banks Error:", error);
+        res.status(500).json({ success: false, message: "Internal server error connecting to bank provider" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/profile/verify-bank:
+ *   post:
+ *     summary: Verify account number against a selected bank and compare with BVN name
+ *     tags: [Profile]
+ */
+router.post('/verify-bank', isAuthenticated, async (req: any, res) => {
+    try {
+        const { account_number, bank_code, bvn_name, is_corporate } = req.body;
+        
+        if (!account_number || !bank_code) {
+            return res.status(400).json({ success: false, message: "Account number and bank code are required." });
+        }
+
+        // 1. Resolve Account Name from Paystack
+        let resolvedAccountName = "";
+        try {
+            const resolveResp = await paystackService.resolveAccountNumber(account_number, bank_code);
+            if (resolveResp && resolveResp.status) {
+                resolvedAccountName = resolveResp.data.account_name;
+            } else {
+                return res.status(400).json({ success: false, message: resolveResp?.message || "Failed to resolve account number." });
+            }
+        } catch (resolveErr: any) {
+            console.error("[Profile] Bank Resolve Error:", resolveErr.response?.data || resolveErr.message);
+            return res.status(400).json({ success: false, message: resolveErr.response?.data?.message || "Invalid account number or bank code." });
+        }
+
+        // 2. Exact or Fuzzy Matching
+        if (is_corporate) {
+            // If it's corporate, frontend must handle manual verification via bank statement.
+            // We just return the resolved name so they can see it.
+            return res.json({
+                success: true,
+                message: "Corporate account requires manual statement verification.",
+                data: {
+                    account_name: resolvedAccountName,
+                    isMatch: false,
+                    reason: "corporate"
+                }
+            });
+        }
+
+        // Fuzzy match: split bvn_name and resolvedAccountName into words, check intersection
+        const normalize = (str: string) => (str || '').toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(Boolean);
+        const bvnWords = normalize(bvn_name);
+        const accWords = normalize(resolvedAccountName);
+
+        // Check how many words intersect
+        const intersection = bvnWords.filter(word => accWords.includes(word));
+        
+        // We require at least 2 matching words (e.g., First and Last name matches)
+        // OR if the BVN only has 2 words, both must match (wait, let's just say >= 2 words match)
+        let isMatch = false;
+        
+        // If the user's name somehow only has 1 valid word, then 1 match is fine.
+        const requiredMatches = Math.min(2, bvnWords.length);
+        if (intersection.length >= requiredMatches && requiredMatches > 0) {
+            isMatch = true;
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                account_name: resolvedAccountName,
+                isMatch,
+                reason: isMatch ? "fuzzy_match_passed" : "mismatch",
+                matchedWords: intersection.length
+            }
+        });
+
+    } catch (error: any) {
+        console.error("[Profile] Verify Bank Error:", error);
+        res.status(500).json({ success: false, message: "Internal server error verifying bank account" });
     }
 });
 
@@ -129,13 +229,14 @@ router.put('/', isAuthenticated, async (req: any, res) => {
         const userId = req.user.id;
         const {
             first_name, surname, middle_name, phone_number, personal_email,
-            state_of_origin, state_of_residence, address, bvn, nin, date_of_birth
+            state_of_origin, state_of_residence, address, bvn, nin, date_of_birth,
+            bank_name, bank_code, account_number, account_name, bank_statement_url, is_corporate_account, bank_verified
         } = req.body;
 
-        // 1. Validate mandatory fields
+        // 1. Validate mandatory fields (including bank details for completion)
         if (!first_name || !surname || !phone_number || !personal_email || !date_of_birth ||
-            !state_of_origin || !state_of_residence || !address) {
-            return res.status(400).json({ success: false, message: "Missing required profile fields (Residential details are mandatory)" });
+            !state_of_origin || !state_of_residence || !address || !bank_name || !account_number) {
+            return res.status(400).json({ success: false, message: "Missing required profile fields (Residential and Bank details are mandatory)" });
         }
 
         // 2. Identity Verification Logic (Trigger if BVN is provided and not already verified)
@@ -186,8 +287,9 @@ router.put('/', isAuthenticated, async (req: any, res) => {
             INSERT INTO user_profiles (
                 user_id, first_name, surname, middle_name, phone_number, personal_email,
                 state_of_origin, state_of_residence, address, bvn, nin, date_of_birth,
-                is_identity_verified, verification_ref, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+                is_identity_verified, verification_ref, updated_at,
+                bank_name, bank_code, account_number, account_name, bank_statement_url, is_corporate_account, bank_verified
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), $15, $16, $17, $18, $19, $20, $21)
             ON CONFLICT (user_id) DO UPDATE SET
                 first_name = EXCLUDED.first_name,
                 surname = EXCLUDED.surname,
@@ -202,14 +304,22 @@ router.put('/', isAuthenticated, async (req: any, res) => {
                 date_of_birth = EXCLUDED.date_of_birth,
                 is_identity_verified = EXCLUDED.is_identity_verified,
                 verification_ref = EXCLUDED.verification_ref,
-                updated_at = NOW()
+                updated_at = NOW(),
+                bank_name = COALESCE(user_profiles.bank_name, EXCLUDED.bank_name),
+                bank_code = COALESCE(user_profiles.bank_code, EXCLUDED.bank_code),
+                account_number = COALESCE(user_profiles.account_number, EXCLUDED.account_number),
+                account_name = COALESCE(user_profiles.account_name, EXCLUDED.account_name),
+                bank_statement_url = COALESCE(user_profiles.bank_statement_url, EXCLUDED.bank_statement_url),
+                is_corporate_account = COALESCE(user_profiles.is_corporate_account, EXCLUDED.is_corporate_account),
+                bank_verified = EXCLUDED.bank_verified
             RETURNING *;
         `;
 
         const values = [
             userId, first_name, surname, middle_name, phone_number, personal_email,
             state_of_origin, state_of_residence, address, bvn, nin, date_of_birth,
-            isIdentityVerified, verificationRef
+            isIdentityVerified, verificationRef,
+            bank_name, bank_code, account_number, account_name, bank_statement_url, is_corporate_account || false, bank_verified || false
         ];
 
         const result = await pool.query(query, values);

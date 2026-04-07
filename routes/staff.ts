@@ -905,9 +905,11 @@ router.get('/investments/:id', async (req, res) => {
         const query = `
             SELECT i.*, 
                    c.full_name as customer_name, c.email as customer_email, c.avatar_url, c.is_active as customer_active,
-                   staff.full_name as officer_name, staff.email as officer_email, staff.avatar_url as officer_avatar
+                   staff.full_name as officer_name, staff.email as officer_email, staff.avatar_url as officer_avatar,
+                   up.bank_name, up.account_number, up.account_name
             FROM investments i
             LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN user_profiles up ON c.id = up.user_id
             LEFT JOIN customers staff ON i.sales_officer_id = staff.id
             WHERE i.id = $1
         `;
@@ -1102,11 +1104,62 @@ router.put('/investments/:id/action', async (req, res) => {
                 } catch (emailErr) {
                     console.error("Failed to sequence CASA email request:", emailErr);
                 }
+            } else {
+                // CASA is already present! Fire the certificate immediately since it just became active
+                try {
+                    // Fetch full investment details after update for precise numbers
+                    const updatedInvRes = await pool.query(`
+                        SELECT i.*, 
+                               c.email as cust_email, c.first_name || ' ' || c.last_name as cust_name 
+                        FROM investments i 
+                        LEFT JOIN customers c ON i.customer_id = c.id 
+                        WHERE i.id = $1
+                    `, [id]);
+                    const upInv = updatedInvRes.rows[0];
+
+                    const customerName = upInv.cust_name || upInv.company_name || upInv.rep_full_name || upInv.customer_name || 'Individual';
+                    const emailToSend = upInv.cust_email || upInv.customer_email || 'example@noltfinance.com';
+                    
+                    const valDate = new Date(upInv.start_date || upInv.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    const matDate = new Date(upInv.maturity_date || Date.now() + 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    
+                    const principal = Number(upInv.investment_amount || 0);
+                    const interestAmt = Number(upInv.interest_amount || 0);
+                    const whtAmt = Number(upInv.wht_amount || 0);
+                    const maturityValue = principal + interestAmt - whtAmt;
+
+                    const principalStr = principal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    const interestAmtStr = interestAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    const whtAmtStr = whtAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    const maturityValueStr = maturityValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                    const emailResult = await zeptoService.sendInvestmentCertificateWithCASA(emailToSend, customerName, upInv.casa_account_number, {
+                        principal: principalStr,
+                        tenure: upInv.tenure_days || 0,
+                        interestRate: upInv.interest_rate || 0,
+                        valueDate: valDate,
+                        maturityDate: matDate,
+                        interestAmount: interestAmtStr,
+                        whtAmount: whtAmtStr,
+                        maturityValue: maturityValueStr
+                    });
+
+                    console.log(`[Cert Trigger] Certificate dispatch successful for ${id} upon approval. Result:`, emailResult);
+                } catch (certError) {
+                    console.error("[Cert Trigger Error] Failed to sequence Certificate emission upon approval:", certError);
+                }
             }
 
         } else {
             await pool.query(`UPDATE investments SET stage = $1, status = $2 WHERE id = $3`, [newStage, newStatus, id]);
         }
+
+        // Add Activity Logging for Investment Action
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, user.id, action, `${action === 'approve'? 'Approved' : 'Rejected'} at ${investment.stage.replace(/_/g, ' ')}`, JSON.stringify({ old_stage: investment.stage, new_stage: newStage })]
+        );
 
         // Notify next stage role for Investments Pipeline
         if (newStatus === 'pending' && investment.stage !== newStage) {
@@ -1204,6 +1257,12 @@ router.put('/investments/:id/finance-fields', isAuthenticated, isStaff, async (r
             [validInterest, wht_amount, id]
         );
 
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, req.user?.id, 'finance_override', `Updated interest amount to ₦${validInterest.toLocaleString()} and WHT to ₦${wht_amount.toLocaleString()}`, JSON.stringify({ interest_amount: validInterest, wht_amount: wht_amount })]
+        );
+
         res.json({ message: "Finance fields safely processed and updated", interest_amount: validInterest, wht_amount });
     } catch (error) {
         console.error("Error updating finance fields:", error);
@@ -1234,6 +1293,12 @@ router.put('/investments/:id/casa', isAuthenticated, isStaff, async (req: AuthRe
         if (invRes.rows.length === 0) {
             return res.status(404).json({ message: "Investment not found." });
         }
+
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, req.user?.id, 'casa_posting', `Assigned CASA account number ${casa_account_number}`, JSON.stringify({ casa_account_number })]
+        );
 
         // Fetch investment with customer details to ensure email availability
         const detailedInvRes = await pool.query(`
@@ -1624,13 +1689,19 @@ router.get('/customers/:id', async (req, res) => {
         const userResult = await pool.query(`
             SELECT DISTINCT ON (c.id)
                 c.*,
+                up.bank_name as up_bank, up.account_number as up_account, up.account_name as up_name,
+                up.bank_statement_url, up.is_corporate_account, up.bank_verified,
+                up.bvn as up_bvn, up.nin as up_nin, up.date_of_birth as up_dob, up.phone_number as up_phone,
                 l.mobile_number, l.state_of_residence, l.mda_tertiary as employer,
-                l.bvn, l.nin, l.date_of_birth, l.primary_home_address,
-                l.bank_name, l.account_number, l.account_name,
+                COALESCE(up.bvn, l.bvn) as bvn, COALESCE(up.nin, l.nin) as nin, COALESCE(up.date_of_birth, l.date_of_birth) as date_of_birth, l.primary_home_address,
+                COALESCE(up.bank_name, l.bank_name) as bank_name, 
+                COALESCE(up.account_number, l.account_number) as account_number, 
+                COALESCE(up.account_name, l.account_name) as account_name,
                 l.gender, l.marital_status, l.religion, l.state_of_origin,
                 l.residential_status, l.ippis_number, l.staff_id,
                 l.average_monthly_income, l.mda_tertiary
             FROM customers c
+            LEFT JOIN user_profiles up ON c.id = up.user_id
             LEFT JOIN loans l ON c.id = l.customer_id
             WHERE c.id = $1
             ORDER BY c.id, l.created_at DESC
@@ -1675,6 +1746,34 @@ router.get('/customers/:id', async (req, res) => {
 
     } catch (error) {
         console.error("Error fetching customer details:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/customers/{id}/verify-bank:
+ *   put:
+ *     summary: Admin overrides and verifies a customer's bank details manually
+ *     tags: [Staff]
+ */
+router.put('/customers/:id/verify-bank', isStaff, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query(`
+            UPDATE user_profiles 
+            SET bank_verified = true 
+            WHERE user_id = $1 
+            RETURNING *
+        `, [id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "User profile not found" });
+        }
+
+        res.json({ success: true, message: "Bank Details manually verified." });
+    } catch (error) {
+        console.error("Error verifying customer bank:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -2803,6 +2902,199 @@ router.post('/loans/application', async (req, res) => {
 
 /**
  * @swagger
+ * /api/staff/investments/application:
+ *   post:
+ *     summary: Create a new investment application (Individual/Corporate) by Staff
+ *     tags: [Staff]
+ */
+router.post('/investments/application', isStaff, async (req, res) => {
+    const user = req.user as any;
+    const userRole = user?.role?.toLowerCase();
+    const officerId = user?.id;
+    if (!officerId) return res.status(401).json({ message: "Unauthorized" });
+
+    // --- Sanitize and Validate Input Fields ---
+    const sanitizePayload = (payload: any) => {
+        const sanitized: any = {};
+        for (const [key, val] of Object.entries(payload)) {
+            if (val === 'null' || val === 'undefined' || val === '' || val === null || val === undefined) {
+                sanitized[key] = null;
+            } else if (typeof val === 'string') {
+                sanitized[key] = val.trim();
+            } else {
+                sanitized[key] = val;
+            }
+        }
+        return sanitized;
+    };
+
+    req.body = sanitizePayload(req.body);
+
+    const {
+        entity_type, 
+        email, phone, fullName, 
+        selectedPlan, currency, amount, tenure_months,
+        rollover_option, contribution_frequency, target_amount, interest_rate,
+        
+        // Identity
+        title, gender, dob, marital_status, religion, mother_maiden_name,
+        
+        // Corporate
+        companyName, rcNumber, businessAddress, businessNature, tin, directors,
+        incorp_date,
+        
+        // Address & NOK
+        homeAddress, stateOfOrigin, stateOfResidence,
+        nokName, nokRelationship, nokAddress,
+
+        // Bank Recovery
+        bankName, accountName, accountNumber,
+
+        // URLs
+        rep_id_url, kyc_docs_url, rep_selfie_url, payment_receipt_url,
+        utility_bill_url, secondary_id_url, cac_url,
+        company_profile_url, status_report_url, memart_url, annual_returns_url, board_resolution_url,
+        
+        // Payment Source
+        payment_method, payment_reference
+    } = req.body;
+
+    if (!email || !amount || !selectedPlan) {
+        return res.status(400).json({ message: "Email, amount, and plan are required." });
+    }
+
+    try {
+        // 1. Resolve/Create Customer
+        let customerId;
+        const checkCustomer = await pool.query('SELECT id FROM customers WHERE email = $1 LIMIT 1', [email]);
+        
+        if (checkCustomer.rows.length > 0) {
+            customerId = checkCustomer.rows[0].id;
+        } else {
+            const tempPassword = Math.random().toString(36).slice(-8);
+            const hashedPassword = await bcrypt.hash(tempPassword, 10);
+            const newCustomer = await pool.query(
+                `INSERT INTO customers (email, full_name, role, is_active, password_hash) 
+                 VALUES ($1, $2, 'customer', true, $3) RETURNING id`,
+                [email, companyName || fullName || 'Anonymous Client', hashedPassword]
+            );
+            customerId = newCustomer.rows[0].id;
+        }
+
+        // 1.5. Payout Bank Details Update (Store in Profile)
+        if (bankName || accountNumber) {
+            await pool.query(
+                `INSERT INTO user_profiles (user_id, bank_name, account_number, account_name, updated_at)
+                 VALUES ($1, $2, $3, $4, NOW())
+                 ON CONFLICT (user_id) DO UPDATE SET 
+                    bank_name = EXCLUDED.bank_name,
+                    account_number = EXCLUDED.account_number,
+                    account_name = EXCLUDED.account_name,
+                    updated_at = NOW()`,
+                [customerId, bankName, accountNumber, accountName]
+            );
+        }
+
+        // 2. Create Investment Application
+        const newInvestment = await pool.query(
+            `INSERT INTO investments (
+                customer_id, sales_officer_id, investment_type, entity_type,
+                company_name, business_address, date_of_incorporation,
+                rep_full_name, rep_phone_number, rep_bvn, rep_nin,
+                rep_state_of_origin, rep_state_of_residence, rep_street_address,
+                investment_amount, tenure_days, currency,
+                rollover_option, contribution_frequency, interest_rate, stage, 
+                status,
+                
+                title, gender, dob, mother_maiden_name, religion, marital_status,
+                nok_name, nok_relationship, nok_address,
+                target_amount, tin, business_nature, rc_number, directors,
+                
+                -- URLs
+                rep_id_url, rep_selfie_url, payment_receipt_url,
+                company_profile_url, status_report_url, memart_url, annual_returns_url, board_resolution_url,
+                utility_bill_url, secondary_id_url, cac_url,
+
+                payment_reference,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, 
+                'pending',
+                $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                $31, $32, $33, $34, $35,
+                $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47,
+                NOW(), NOW()
+            ) RETURNING id`,
+            [
+                customerId, 
+                officerId,
+                `NOLT_${selectedPlan}`, // Prefix required by check constraint
+                entity_type || 'INDIVIDUAL',
+                companyName, businessAddress, incorp_date || null,
+                fullName, phone, req.body.bvn || null, req.body.nin || null,
+                stateOfOrigin, stateOfResidence, homeAddress,
+                amount, (tenure_months || 12) * 30, currency || 'NGN',
+                rollover_option || 'principal_interest', contribution_frequency || 'monthly',
+                interest_rate || 0,
+                payment_receipt_url ? 'compliance_review' : 'onboarding', // stage is $21
+                
+                title, gender, dob, mother_maiden_name, religion, marital_status,
+                nokName, nokRelationship, nokAddress,
+                target_amount || null, tin, businessNature, rcNumber,
+                JSON.stringify(directors || []),
+                // URLs starting at $36
+                rep_id_url || null,
+                rep_selfie_url || null,
+                payment_receipt_url || null,
+                company_profile_url || null,
+                status_report_url || null,
+                memart_url || null,
+                annual_returns_url || null,
+                board_resolution_url || null,
+                utility_bill_url || null,
+                secondary_id_url || null,
+                cac_url || null,
+                payment_reference || null
+            ]
+        );
+
+        // 2.5 Log Activity for Timeline (Staff Initiated)
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata)
+             VALUES ($1, $2, 'staff_application', $3, $4)`,
+            [
+                newInvestment.rows[0].id, 
+                officerId,
+                'Investment application created by staff',
+                JSON.stringify({ 
+                    amount: amount, 
+                    currency: currency, 
+                    plan: selectedPlan,
+                    staff_id: officerId,
+                    staff_role: userRole
+                })
+            ]
+        );
+
+        // 3. Emit Socket Event
+        const io = getIO();
+        io.emit('investment_new', { id: newInvestment.rows[0].id, customer_id: customerId });
+
+        res.status(201).json({ 
+            message: "Investment application created successfully", 
+            investment_id: newInvestment.rows[0].id,
+            account_status: checkCustomer.rows.length > 0 ? 'existing' : 'new_created'
+        });
+
+    } catch (error) {
+        console.error("Error creating investment application via staff:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
  * /staff/loans/{id}/assign:
  *   patch:
  *     summary: Reassign a loan to another sales officer
@@ -3279,6 +3571,11 @@ router.post('/investments/:id/liquidate-action', isStaff, async (req: any, res: 
             await pool.query(
                 `UPDATE investments SET is_liquidating = false, liquidation_stage = null WHERE id = $1`, [id]
             );
+            await pool.query(
+                `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [id, req.user.id, 'reject', `Rejected liquidation request at ${stage.replace(/_/g, ' ')}`, JSON.stringify({ note })]
+            );
             return res.json({ success: true, message: `Liquidation request rejected by ${role}` });
         }
 
@@ -3324,6 +3621,12 @@ router.post('/investments/:id/liquidate-action', isStaff, async (req: any, res: 
                 [remainingBalance, finalStatus, id]
             );
 
+            await pool.query(
+                `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [id, req.user.id, 'approve', `Finalized liquidation at finance`, JSON.stringify({ note, payout: remainingBalance })]
+            );
+
             return res.json({ success: true, message: "Liquidation fully processed and finalized." });
         } else {
             return res.status(400).json({ message: "Invalid liquidation stage." });
@@ -3332,6 +3635,12 @@ router.post('/investments/:id/liquidate-action', isStaff, async (req: any, res: 
         // Move to next stage
         await pool.query(
             `UPDATE investments SET liquidation_stage = $1 WHERE id = $2`, [nextStage, id]
+        );
+
+        await pool.query(
+            `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, req.user.id, 'approve', `Approved liquidation request at ${stage.replace(/_/g, ' ')}`, JSON.stringify({ note, new_stage: nextStage })]
         );
 
         // Notify next stage role for Liquidation Pipeline

@@ -366,7 +366,11 @@ router.post('/:id/liquidate', isAuthenticated, async (req: any, res) => {
 
         if (new Date() < maturityDate) {
             isEarly = true;
-            penaltyAmount = requestAmount * 0.10; // 10% penalty
+            const msElapsed = Math.max(0, new Date().getTime() - createdDate.getTime());
+            const daysElapsed = msElapsed / (1000 * 60 * 60 * 24);
+            const rate = Number(investment.interest_rate) || 0;
+            const accruedInterest = requestAmount * (rate / 100) * (daysElapsed / 365);
+            penaltyAmount = accruedInterest * 0.30; // 30% of accrued interest
         }
 
         // Mutate the record
