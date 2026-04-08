@@ -131,15 +131,19 @@ export const kycService = {
                 const confidence = faceData?.confidence || 0;
                 const status = faceData?.status || false;
 
+                console.log(`[KYC Service] Face Match Result: Status=${status}, Confidence=${confidence}`);
+
                 return {
                     success: status && confidence >= 70, // Industry standard threshold
                     confidence,
-                    message: (status && confidence >= 70) ? "Face verification successful" : "Face does not match BVN record"
+                    message: (status && confidence >= 70) ? "Face verification successful" : 
+                             (!status ? "Face does not match BVN record" : `Face match confidence too low (${confidence.toFixed(2)}%)`)
                 };
             }
+            console.warn("[KYC Service] Face Match Failed - response success was false:", response.data);
             return { success: false, confidence: 0, message: response.data?.message || "Verification failed" };
         } catch (error: any) {
-            console.error("[KYC Service] Face Match Error:", error.response?.data || error.message);
+            console.error("[KYC Service] Face Match API Error:", error.response?.data || error.message);
             return { success: false, confidence: 0, message: error.response?.data?.message || "Internal verification error" };
         }
     }
