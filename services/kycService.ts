@@ -33,6 +33,40 @@ interface FaceMatchResult {
     message: string;
 }
 
+/**
+ * Normalizes dates from various formats (e.g., "01-April-2002" or ISO) to YYYY-MM-DD
+ */
+const normalizeDate = (dateStr: string): string => {
+    if (!dateStr) return "";
+    
+    // Standard ISO format check
+    if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+        return dateStr.split('T')[0];
+    }
+
+    try {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) {
+            return d.toISOString().split('T')[0];
+        }
+    } catch (e) {
+        console.warn(`[KYC Service] Failed to normalize date: ${dateStr}`);
+    }
+    
+    return dateStr.toLowerCase().trim();
+};
+
+/**
+ * Normalizes phone numbers for comparison
+ */
+const normalizePhone = (phone: string): string => {
+    if (!phone) return "";
+    let cleaned = phone.replace(/\D/g, '');
+    if (cleaned.startsWith('234')) cleaned = cleaned.substring(3);
+    if (cleaned.startsWith('0')) cleaned = cleaned.substring(1);
+    return cleaned;
+};
+
 export const kycService = {
     lookupBVN: async (bvn: string): Promise<BVNData | null> => {
         try {
@@ -69,23 +103,15 @@ export const kycService = {
             matches.firstName = userData.firstName.trim().toLowerCase() === bvnData.firstName.trim().toLowerCase();
         }
 
-        // 2. DOB Match (YYYY-MM-DD)
-        if (userData.dob && bvnData.dateOfBirth) {
-            // Ensure both are in same format if possible
-            const userDob = userData.dob.split('T')[0]; // Handle ISO strings
-            const bvnDob = bvnData.dateOfBirth.split('T')[0];
+        // 2. DOB Match with normalization
+        const userDob = normalizeDate(userData.dob);
+        const bvnDob = normalizeDate(bvnData.dateOfBirth);
+        
+        if (userDob && bvnDob) {
             matches.dob = userDob === bvnDob;
         }
 
-        // 3. Phone Match (Stripping non-digits and leading zeros/234)
-        const normalizePhone = (phone: string) => {
-            if (!phone) return "";
-            let cleaned = phone.replace(/\D/g, '');
-            if (cleaned.startsWith('234')) cleaned = cleaned.substring(3);
-            if (cleaned.startsWith('0')) cleaned = cleaned.substring(1);
-            return cleaned;
-        };
-
+        // 3. Phone Match
         if (userData.mobileNumber && bvnData.phoneNumber1) {
             matches.phone = normalizePhone(userData.mobileNumber) === normalizePhone(bvnData.phoneNumber1);
         }
@@ -97,7 +123,7 @@ export const kycService = {
         if (!isValid) {
             const missing = [];
             if (!matches.firstName) missing.push("First Name");
-            if (!matches.dob) missing.push("Date of Birth");
+            if (!matches.dob) missing.push(`Date of Birth (${userDob} vs ${bvnDob})`);
             if (!matches.phone) missing.push("Phone Number");
             details = `Validation failed. Mismatched: ${missing.join(', ')}. Need at least 2 matches.`;
         } else {
@@ -125,26 +151,52 @@ export const kycService = {
                 }
             );
 
-            // Response structure: { success: true, data: { face_data: { confidence: 99.92, status: true, ... }, ... } }
-            if (response.data && response.data.success) {
-                const faceData = response.data?.face_data;
-                const confidence = faceData?.confidence || 0;
-                const status = faceData?.status || false;
+            // Robust data extraction
+            const body = response.data;
+            if (body && (body.success === true || body.statusCode === 200 || body.response_code === "00")) {
+                const data = body.data || {};
+                const faceData = data.face_data || data.faceData || {};
+                
+                // Handle different status formats (boolean, string "true", or code "00")
+                const status = faceData.status === true || faceData.status === "true" || faceData.response_code === "00";
+                const confidence = parseFloat(faceData.confidence) || 0;
 
                 console.log(`[KYC Service] Face Match Result: Status=${status}, Confidence=${confidence}`);
 
-                return {
-                    success: status && confidence >= 70, // Industry standard threshold
-                    confidence,
-                    message: (status && confidence >= 70) ? "Face verification successful" : 
-                             (!status ? "Face does not match BVN record" : `Face match confidence too low (${confidence.toFixed(2)}%)`)
-                };
+                if (status && confidence >= 70) {
+                    return {
+                        success: true,
+                        confidence,
+                        message: "Face verification successful"
+                    };
+                } else if (status) {
+                    return {
+                        success: false,
+                        confidence,
+                        message: `Face match confidence too low (${confidence.toFixed(2)}%). Please use a clearer selfie.`
+                    };
+                } else {
+                    return {
+                        success: false,
+                        confidence,
+                        message: "Face does not match BVN record. Please ensure you are the owner of the BVN."
+                    };
+                }
             }
-            console.warn("[KYC Service] Face Match Failed - response success was false:", response.data);
-            return { success: false, confidence: 0, message: response.data?.message || "Verification failed" };
+            
+            console.warn("[KYC Service] Face Match Failed - Unexpected Response Structure:", body);
+            return { 
+                success: false, 
+                confidence: 0, 
+                message: body?.message || "Verification service returned an error. Please try again later." 
+            };
         } catch (error: any) {
             console.error("[KYC Service] Face Match API Error:", error.response?.data || error.message);
-            return { success: false, confidence: 0, message: error.response?.data?.message || "Internal verification error" };
+            return { 
+                success: false, 
+                confidence: 0, 
+                message: error.response?.data?.message || "Verification service is currently unavailable. Please try again later." 
+            };
         }
     }
 };
