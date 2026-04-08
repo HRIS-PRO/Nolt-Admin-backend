@@ -127,7 +127,7 @@ export const kycService = {
 
             // Response structure: { success: true, data: { face_data: { confidence: 99.92, status: true, ... }, ... } }
             if (response.data && response.data.success) {
-                const faceData = response.data.data?.face_data;
+                const faceData = response.data?.face_data;
                 const confidence = faceData?.confidence || 0;
                 const status = faceData?.status || false;
 
