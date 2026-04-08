@@ -198,13 +198,13 @@ router.get('/verify-gift', isAuthenticated, async (req: any, res) => {
                 AND currency = $2 
                 AND is_active = TRUE
                 AND $4 >= min_amount AND (max_amount IS NULL OR $4 <= max_amount)
-                ORDER BY ABS(tenure_months - $3) ASC, created_at DESC LIMIT 1;
+                ORDER BY ABS(tenure_days - $3) ASC, created_at DESC LIMIT 1;
             `;
             const rateResult = await pool.query(query, [plan, currency, tenure, amount]);
             const interestRate = rateResult.rows[0]?.interest_rate || 0;
 
             const insertQuery = `
-                INSERT INTO investment_gifts (gifter_id, recipient_email, plan_name, amount, tenure_months, currency, interest_rate, payment_reference, status)
+                INSERT INTO investment_gifts (gifter_id, recipient_email, plan_name, amount, tenure_days, currency, interest_rate, payment_reference, status)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'paid')
                 ON CONFLICT (payment_reference) DO UPDATE 
                 SET interest_rate = EXCLUDED.interest_rate

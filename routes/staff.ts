@@ -3635,7 +3635,7 @@ router.post('/investments/application', isStaff, async (req, res) => {
     const {
         entity_type,
         email, phone, fullName,
-        selectedPlan, currency, amount, tenure_months,
+        selectedPlan, currency, amount, tenure_days,
         rollover_option, contribution_frequency, target_amount, interest_rate,
 
         // Identity
@@ -3736,7 +3736,7 @@ router.post('/investments/application', isStaff, async (req, res) => {
                 companyName, businessAddress, incorp_date || null,
                 fullName, phone, req.body.bvn || null, req.body.nin || null,
                 stateOfOrigin, stateOfResidence, homeAddress,
-                amount, (tenure_months || 12) * 30, currency || 'NGN',
+                amount, tenure_days || 365, currency || 'NGN',
                 rollover_option || 'principal_interest', contribution_frequency || 'monthly',
                 interest_rate || 0,
                 payment_receipt_url ? 'compliance_review' : 'onboarding', // stage is $21

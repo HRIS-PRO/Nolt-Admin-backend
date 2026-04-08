@@ -22,9 +22,9 @@ const isSuperAdmin = (req: any, res: any, next: any) => {
  */
 router.post('/', isSuperAdmin, async (req, res) => {
     try {
-        const { plan_name, currency, tenure_months, min_amount, max_amount, interest_rate } = req.body;
+        const { plan_name, currency, tenure_days, min_amount, max_amount, interest_rate } = req.body;
 
-        if (!plan_name || !currency || !tenure_months || !min_amount || !interest_rate) {
+        if (!plan_name || !currency || !tenure_days || !min_amount || !interest_rate) {
             return res.status(400).json({ message: "Missing required fields" });
         }
 
@@ -50,7 +50,7 @@ router.post('/', isSuperAdmin, async (req, res) => {
         const rate = await yieldRateService.createRate({
             plan_name,
             currency,
-            tenure_months: parseInt(tenure_months),
+            tenure_days: parseInt(tenure_days),
             min_amount: parseFloat(min_amount),
             max_amount: max_amount ? parseFloat(max_amount) : null,
             interest_rate: parseFloat(interest_rate)
@@ -115,7 +115,7 @@ router.get('/calculate', async (req, res) => {
             plan_name: plan as string,
             currency: currency as string,
             amount: parseFloat(amount as string),
-            tenure_months: parseInt(tenure as string)
+            tenure_days: parseInt(tenure as string)
         });
 
         if (!rate) {
