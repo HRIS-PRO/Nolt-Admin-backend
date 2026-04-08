@@ -258,7 +258,7 @@ router.put('/', isAuthenticated, async (req: any, res) => {
                 const bvnData = await kycService.lookupBVN(bvn);
                 if (bvnData) {
                     const validation = kycService.validateBVNMatch(
-                        { firstName: first_name, dob: date_of_birth, mobileNumber: phone_number },
+                        { firstName: first_name, surname: surname, dob: date_of_birth, mobileNumber: phone_number },
                         bvnData
                     );
 

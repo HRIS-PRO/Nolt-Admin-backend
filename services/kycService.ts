@@ -98,9 +98,15 @@ export const kycService = {
             phone: false
         };
 
-        // 1. First Name Match (Case-insensitive)
-        if (userData.firstName && bvnData.firstName) {
-            matches.firstName = userData.firstName.trim().toLowerCase() === bvnData.firstName.trim().toLowerCase();
+        // 1. Name Match (Cross-check First and Last names)
+        const userFirst = userData.firstName?.trim().toLowerCase() || "";
+        const userLast = userData.surname?.trim().toLowerCase() || "";
+        const bvnFirst = bvnData.firstName?.trim().toLowerCase() || "";
+        const bvnLast = bvnData.lastName?.trim().toLowerCase() || "";
+
+        if (userFirst && (bvnFirst || bvnLast)) {
+            matches.firstName = (userFirst === bvnFirst) || (userFirst === bvnLast) || 
+                                (userLast === bvnFirst) || (userLast === bvnLast);
         }
 
         // 2. DOB Match with normalization
