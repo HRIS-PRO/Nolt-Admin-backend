@@ -364,5 +364,55 @@ export const resendService = {
             console.error("Resend Service Error (Password Reset):", error);
             throw new Error(error.message || "Failed to send password reset email");
         }
+    },
+
+    /**
+     * Sends an email to the customer on successful investment application
+     */
+    sendInvestmentSuccessEmail: async (
+        emailAddress: string,
+        name: string,
+        investmentId: string,
+        amount: string | number
+    ): Promise<SendEmailTokenResponse> => {
+        if (!RESEND_API_KEY) {
+            console.warn("Missing Resend API Key, skipping investment success email.");
+            return { id: 'skipped-no-key' };
+        }
+
+        try {
+            const { data, error } = await resend.emails.send({
+                from: RESEND_FROM_EMAIL,
+                to: [emailAddress],
+                subject: 'Investment Application Received - Nolt Finance',
+                html: `
+                    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+                        <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                            <h2 style="color: #111827; margin-top: 0;">Hello ${name},</h2>
+                            <p style="color: #4b5563; line-height: 1.6;">We have successfully received your investment application.</p>
+                            
+                            <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                                <p style="margin: 0; color: #374151;"><strong>Investment ID:</strong> INV-${investmentId}</p>
+                                <p style="margin: 8px 0 0 0; color: #374151;"><strong>Amount:</strong> ₦${Number(amount).toLocaleString()}</p>
+                            </div>
+
+                            <p style="color: #4b5563; line-height: 1.6;">Our team is currently reviewing your application. You will be notified via email once it has been approved and moved to the next stage.</p>
+                            
+                            <p style="color: #4b5563; margin-bottom: 0;">Thank you for choosing Nolt Finance!</p>
+                        </div>
+                    </div>
+                `
+            });
+
+            if (error) {
+                console.error("Resend Investment Success Email Error:", error);
+                return { error };
+            }
+
+            return data || { id: 'mock-id' };
+        } catch (error: any) {
+            console.error("Resend Service Error (Investment Success):", error);
+            return { error: error.message };
+        }
     }
 };

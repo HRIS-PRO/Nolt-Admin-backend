@@ -162,14 +162,29 @@ router.put('/onboarding-complete', async (req, res) => {
 router.get('/referral/:code', async (req, res) => {
     try {
         const { code } = req.params;
+        
+        // 1. Check Sales Officers
         const userResult = await pool.query('SELECT id, full_name, avatar_url FROM customers WHERE referral_code = $1', [code]);
         const user = userResult.rows[0];
 
         if (user) {
-            res.json(user);
-        } else {
-            res.status(404).json({ message: "Referral code not found" });
+            return res.json(user);
         }
+        
+        // 2. Check Promotions
+        const promoResult = await pool.query('SELECT utm_campaign FROM promotions WHERE utm_campaign = $1', [code]);
+        const promotion = promoResult.rows[0];
+        
+        if (promotion) {
+            return res.json({
+                id: 'PROMO_' + promotion.utm_campaign,
+                full_name: "Marketing Promotion",
+                is_promotion: true
+            });
+        }
+
+        res.status(404).json({ message: "Referral code not found" });
+        
     } catch (error) {
         console.error("Error checking referral code:", error);
         res.status(500).json({ message: "Internal Server Error" });
@@ -224,6 +239,32 @@ router.post('/marketing', async (req, res) => {
                 'INSERT INTO marketing (customer_id, hear_about_us, referral_code, officer_name) VALUES ($1, $2, $3, $4)',
                 [customerId, hear_about_us, referral_code || null, officer_name || null]
             );
+
+            if (referral_code && officer_name === "Marketing Promotion") {
+                const promoCheck = await pool.query('SELECT utm_campaign FROM promotions WHERE utm_campaign = $1', [referral_code]);
+                if (promoCheck.rows.length > 0) {
+                    await pool.query(
+                        'UPDATE promotions SET current_redemptions = current_redemptions + 1 WHERE utm_campaign = $1',
+                        [referral_code]
+                    );
+                    try {
+                        const { getIO } = await import('../socket.js');
+                        const io = getIO();
+                        if (io) {
+                            const updatedPromo = await pool.query('SELECT clicks, current_redemptions FROM promotions WHERE utm_campaign = $1', [referral_code]);
+                            if (updatedPromo.rows.length > 0) {
+                                io.emit('promotion_click', { 
+                                    utm_campaign: referral_code, 
+                                    clicks: updatedPromo.rows[0].clicks, 
+                                    current_redemptions: updatedPromo.rows[0].current_redemptions 
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Socket error upon redemption:', e);
+                    }
+                }
+            }
 
             res.status(201).json({ message: "Marketing data saved" });
         } catch (error) {

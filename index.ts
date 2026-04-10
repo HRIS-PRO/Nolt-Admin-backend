@@ -145,6 +145,9 @@ app.use('/api/kyc', kycRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/yield-rates', yieldRateRoutes);
 
+import promotionsRoutes from './routes/promotions.js';
+app.use('/api/promotions', promotionsRoutes);
+
 import { zeptoService as resendService } from './services/zeptoService.js';
 
 app.post('/test/email', async (req, res) => {

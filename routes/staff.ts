@@ -1399,7 +1399,7 @@ router.get('/loans/timeline-report/export-csv', async (req, res) => {
  */
 router.get('/loans', async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = '', status = '', stage = '' } = req.query;
+        const { page = 1, limit = 10, search = '', status = '', stage = '', officer = '' } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
 
         // Build Filters
@@ -1414,6 +1414,14 @@ router.get('/loans', async (req, res) => {
         if (typeof stage === 'string' && stage) {
             filters.push(`l.stage = $${paramIndex++}`);
             values.push(stage);
+        }
+        if (typeof officer === 'string' && officer) {
+            if (officer === 'unassigned') {
+                filters.push(`(l.sales_officer_id IS NULL OR c.full_name = 'Marketing Promotion')`);
+            } else {
+                filters.push(`l.sales_officer_id = $${paramIndex++}`);
+                values.push(officer);
+            }
         }
         if ((req.user as any)?.role === 'sales_officer') {
             filters.push(`l.sales_officer_id = $${paramIndex++}`);
@@ -1503,8 +1511,14 @@ router.get('/loans', async (req, res) => {
 router.get('/investments', async (req: any, res) => {
     try {
         const { investmentService } = await import('../services/investmentService.js');
-        const officerId = req.user?.role?.toLowerCase() === 'sales_officer' ? req.user.id : undefined;
-        const investments = await investmentService.getAllInvestments(officerId);
+        const role = req.user?.role?.toLowerCase();
+        
+        const options = {
+            officerId: role === 'sales_officer' ? req.user.id : undefined,
+            unassignedOnly: role === 'marketing'
+        };
+        
+        const investments = await investmentService.getAllInvestments(options);
         res.json(investments);
     } catch (error) {
         console.error("Error fetching investments:", error);
@@ -1617,10 +1631,10 @@ router.patch('/investments/:id/assign', async (req, res) => {
 
     if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    // Permission Check: Sales Manager, Admin, Super Admin
-    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin'];
+    // Permission Check: Sales Manager, Admin, Super Admin, Customer Experience
+    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin', 'customer_experience'];
     if (!allowedRoles.includes(user.role)) {
-        return res.status(403).json({ message: "Only Managers and Admins can reassign investments." });
+        return res.status(403).json({ message: "Only Managers, Admins and CX can reassign investments." });
     }
 
     if (!sales_officer_id) {
@@ -3826,10 +3840,10 @@ router.patch('/loans/:id/assign', async (req, res) => {
 
     if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    // Permission Check: Sales Manager, Admin, Super Admin
-    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin'];
+    // Permission Check: Sales Manager, Admin, Super Admin, Customer Experience
+    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin', 'customer_experience'];
     if (!allowedRoles.includes(user.role)) {
-        return res.status(403).json({ message: "Only Managers and Admins can reassign loans." });
+        return res.status(403).json({ message: "Only Managers, Admins and CX can reassign loans." });
     }
 
     if (!sales_officer_id) {

@@ -440,7 +440,7 @@ export const zeptoService = {
                         }
                     }
                 ],
-                subject: "Reset Your Password - Nolt Finance",
+                subject: "Reset Your Password - NOLT Finance",
                 htmlbody: `
                     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
                         <h2>Reset Your Password</h2>
@@ -546,7 +546,7 @@ export const zeptoService = {
                         }
                     }
                 ],
-                subject: "Your Nolt Finance Investment Certificate",
+                subject: "Your NOLT Finance Investment Certificate",
                 htmlbody: `
                     <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 700px; margin: 40px auto; color: #1e293b; line-height: 1.5; background-color: #f8fafc; padding: 20px;">
                         <div style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1); border: 1px solid #e2e8f0;">
@@ -634,6 +634,60 @@ export const zeptoService = {
         } catch (error: any) {
             console.error("Zepto Service Error (Certificate):", error);
             throw new Error(error.message || "Failed to send certificate email");
+        }
+    },
+
+    /**
+     * Sends an email to the customer on successful investment application
+     */
+    sendInvestmentSuccessEmail: async (
+        emailAddress: string,
+        name: string,
+        investmentId: string,
+        amount: string | number
+    ): Promise<SendEmailTokenResponse> => {
+        if (!ZEPTO_TOKEN) {
+            console.warn("Missing Zepto API Key, skipping investment success email.");
+            return { id: 'skipped-no-key' };
+        }
+
+        try {
+            const resp = await client.sendMail({
+                from: {
+                    address: ZEPTO_FROM_EMAIL,
+                    name: ZEPTO_FROM_NAME
+                },
+                to: [
+                    {
+                        email_address: {
+                            address: emailAddress,
+                            name: name
+                        }
+                    }
+                ],
+                subject: "Investment Application Received - NOLT Finance",
+                htmlbody: `
+                    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+                        <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                            <h2 style="color: #111827; margin-top: 0;">Hello ${name},</h2>
+                            <p style="color: #4b5563; line-height: 1.6;">We have successfully received your investment application.</p>
+                            
+                            <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                                <p style="margin: 0; color: #374151;"><strong>Investment ID:</strong> INV-${investmentId}</p>
+                                <p style="margin: 8px 0 0 0; color: #374151;"><strong>Amount:</strong> ₦${Number(amount).toLocaleString()}</p>
+                            </div>
+
+                            <p style="color: #4b5563; line-height: 1.6;">Our team is currently reviewing your application. You will be notified via email once it has been approved and moved to the next stage.</p>
+                            
+                            <p style="color: #4b5563; margin-bottom: 0;">Thank you for choosing Nolt Finance!</p>
+                        </div>
+                    </div>
+                `
+            });
+            return { id: 'zepto-sent', ...resp };
+        } catch (error: any) {
+            console.error("Zepto Service Error (Investment Success):", error);
+            return { error: error.message };
         }
     }
 };

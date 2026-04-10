@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { investmentService } from '../services/investmentService.js';
 import { paystackService } from '../services/paystackService.js';
+import { zeptoService as emailService } from '../services/zeptoService.js';
 import pool from '../config/db.js';
 
 const router = Router();
@@ -81,6 +82,24 @@ router.post('/', isAuthenticated, async (req: any, res) => {
 
         const { giftToken } = req.body;
         const investment = await investmentService.createInvestment(userId, req.body, giftToken);
+
+        // Send Email Notification
+        try {
+            const userResult = await pool.query('SELECT full_name, email FROM customers WHERE id = $1', [userId]);
+            if (userResult.rows[0]) {
+                const customer = userResult.rows[0];
+                await emailService.sendInvestmentSuccessEmail(
+                    customer.email,
+                    customer.full_name,
+                    investment.id,
+                    req.body.investment_amount
+                );
+            }
+        } catch (emailError) {
+            console.error("Failed to send investment success email", emailError);
+            // Don't fail the overall request if the email fails.
+        }
+
         res.status(201).json(investment);
     } catch (error: any) {
         console.error("Create Investment Error:", error);

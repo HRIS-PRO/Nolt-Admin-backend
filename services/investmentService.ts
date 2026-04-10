@@ -123,19 +123,8 @@ export const investmentService = {
                 }
             }
 
-            // 2. Round Robin Logic (if no referral)
-            if (!assignedOfficerId) {
-                const officersResult = await client.query("SELECT id FROM customers WHERE role = 'sales_officer' AND is_active = true");
-                const officers = officersResult.rows;
-                if (officers.length > 0) {
-                    const randomIndex = Math.floor(Math.random() * officers.length);
-                    assignedOfficerId = officers[randomIndex].id;
-                } else {
-                    // Fallback to superadmin
-                    const adminResult = await client.query("SELECT id FROM customers WHERE (role = 'super_admin' OR role = 'superadmin') AND is_active = true LIMIT 1");
-                    if (adminResult.rows[0]) assignedOfficerId = adminResult.rows[0].id;
-                }
-            }
+            // 2. Round Robin Logic REMOVED for Marketing Attribution
+            // If there's no referral code, the sales_officer_id remains null so marketing can view it
 
             // Update assigned values in array
             values[62] = assignedOfficerId;
@@ -239,7 +228,7 @@ export const investmentService = {
         return result.rows;
     },
 
-    getAllInvestments: async (officerId?: number) => {
+    getAllInvestments: async (options?: { officerId?: number; unassignedOnly?: boolean }) => {
         let query = `
             SELECT i.*, 
                    c.full_name as customer_name, c.email as customer_email,
@@ -251,12 +240,15 @@ export const investmentService = {
             LEFT JOIN customers staff ON i.sales_officer_id = staff.id
             LEFT JOIN investment_gifts ig ON i.id = ig.investment_id
             LEFT JOIN customers gc ON ig.gifter_id = gc.id
+            WHERE 1=1
         `;
         let values: any[] = [];
         
-        if (officerId) {
-            query += ` WHERE i.sales_officer_id = $1`;
-            values.push(officerId);
+        if (options?.officerId) {
+            query += ` AND i.sales_officer_id = $1`;
+            values.push(options.officerId);
+        } else if (options?.unassignedOnly) {
+            query += ` AND i.sales_officer_id IS NULL`;
         }
         
         query += ` ORDER BY i.created_at DESC`;
