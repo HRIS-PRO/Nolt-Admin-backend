@@ -10,7 +10,7 @@ const options = {
         },
         servers: [
             {
-                url: 'https://nolt-admin-backend-production.up.railway.app',
+                url: 'https://nolt-admin-backend-production-7761.up.railway.app',
                 description: 'Production server',
             },
 

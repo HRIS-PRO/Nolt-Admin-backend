@@ -11,10 +11,10 @@ export const uploadFile = async (file: Express.Multer.File, path: string) => {
         try {
             buffer = await sharp(file.buffer)
                 .resize({ width: 1920, height: 1920, fit: 'inside', withoutEnlargement: true }) // Max 1920px
-                .webp({ quality: 80 }) // Convert to WebP, 80% quality
+                .jpeg({ quality: 90 }) // Convert to JPEG, 90% quality for KYC compatibility
                 .toBuffer();
-            contentType = 'image/webp';
-            path = path.replace(/\.[^/.]+$/, "") + ".webp"; // Change extension to .webp
+            contentType = 'image/jpeg';
+            path = path.replace(/\.[^/.]+$/, "") + ".jpg"; // Change extension to .jpg
         } catch (error) {
             console.error("Image compression failed, using original file", error);
         }

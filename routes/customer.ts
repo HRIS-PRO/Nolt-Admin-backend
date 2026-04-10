@@ -162,14 +162,29 @@ router.put('/onboarding-complete', async (req, res) => {
 router.get('/referral/:code', async (req, res) => {
     try {
         const { code } = req.params;
+        
+        // 1. Check Sales Officers
         const userResult = await pool.query('SELECT id, full_name, avatar_url FROM customers WHERE referral_code = $1', [code]);
         const user = userResult.rows[0];
 
         if (user) {
-            res.json(user);
-        } else {
-            res.status(404).json({ message: "Referral code not found" });
+            return res.json(user);
         }
+        
+        // 2. Check Promotions
+        const promoResult = await pool.query('SELECT utm_campaign FROM promotions WHERE utm_campaign = $1', [code]);
+        const promotion = promoResult.rows[0];
+        
+        if (promotion) {
+            return res.json({
+                id: 'PROMO_' + promotion.utm_campaign,
+                full_name: "Marketing Promotion",
+                is_promotion: true
+            });
+        }
+
+        res.status(404).json({ message: "Referral code not found" });
+        
     } catch (error) {
         console.error("Error checking referral code:", error);
         res.status(500).json({ message: "Internal Server Error" });
@@ -224,6 +239,32 @@ router.post('/marketing', async (req, res) => {
                 'INSERT INTO marketing (customer_id, hear_about_us, referral_code, officer_name) VALUES ($1, $2, $3, $4)',
                 [customerId, hear_about_us, referral_code || null, officer_name || null]
             );
+
+            if (referral_code && officer_name === "Marketing Promotion") {
+                const promoCheck = await pool.query('SELECT utm_campaign FROM promotions WHERE utm_campaign = $1', [referral_code]);
+                if (promoCheck.rows.length > 0) {
+                    await pool.query(
+                        'UPDATE promotions SET current_redemptions = current_redemptions + 1 WHERE utm_campaign = $1',
+                        [referral_code]
+                    );
+                    try {
+                        const { getIO } = await import('../socket.js');
+                        const io = getIO();
+                        if (io) {
+                            const updatedPromo = await pool.query('SELECT clicks, current_redemptions FROM promotions WHERE utm_campaign = $1', [referral_code]);
+                            if (updatedPromo.rows.length > 0) {
+                                io.emit('promotion_click', { 
+                                    utm_campaign: referral_code, 
+                                    clicks: updatedPromo.rows[0].clicks, 
+                                    current_redemptions: updatedPromo.rows[0].current_redemptions 
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Socket error upon redemption:', e);
+                    }
+                }
+            }
 
             res.status(201).json({ message: "Marketing data saved" });
         } catch (error) {
@@ -388,11 +429,20 @@ router.post('/loans', async (req, res) => {
 
             // Auto-assign Sales Officer
             let assignedOfficerId = null;
+            let effectiveReferralCode = referral_code;
 
-            if (referral_code) {
+            // If no referral code provided in this request, check if the customer used one during signup/marketing
+            if (!effectiveReferralCode) {
+                const marketingResult = await pool.query('SELECT referral_code FROM marketing WHERE customer_id = $1 ORDER BY id DESC LIMIT 1', [customerId]);
+                if (marketingResult.rows[0]?.referral_code) {
+                    effectiveReferralCode = marketingResult.rows[0].referral_code;
+                    console.log(`[Referral] Found signup referral code for loan customer ${customerId}: ${effectiveReferralCode}`);
+                }
+            }
+
+            if (effectiveReferralCode) {
                 // 1. Try to find officer by referral code
-                // Note: Referral code is unique in customers table
-                const referrerResult = await pool.query('SELECT id FROM customers WHERE referral_code = $1', [referral_code]);
+                const referrerResult = await pool.query('SELECT id FROM customers WHERE referral_code = $1', [effectiveReferralCode]);
                 const referrer = referrerResult.rows[0];
                 if (referrer) {
                     assignedOfficerId = referrer.id;
@@ -468,7 +518,7 @@ router.post('/loans', async (req, res) => {
                     work_id_url || null, payslip_url || null,
                     references ? JSON.stringify(references) : null,
                     requested_loan_amount || 0, loan_tenure_months || 0, signatures || null,
-                    mda_tertiary || null, ippis_number || null, staff_id || null, referral_code || null, eligible_amount || 0,
+                    mda_tertiary || null, ippis_number || null, staff_id || null, effectiveReferralCode || null, eligible_amount || 0,
                     bank_name || null, account_number || null, account_name || null,
                     assignedOfficerId
                 ]
@@ -560,6 +610,73 @@ router.get('/loans', async (req, res) => {
         }
     } else {
         res.status(401).json({ message: "Unauthorized" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/customer/verify-identity:
+ *   post:
+ *     summary: Verify customer identity via BVN Face Match
+ *     tags: [Customers]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bvn, selfie_url]
+ *             properties:
+ *               bvn:
+ *                 type: string
+ *               selfie_url:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Identity verified successfully
+ *       400:
+ *         description: Verification failed
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/customer/verify-identity', async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+
+    try {
+        const { bvn, selfie_url } = req.body;
+        // @ts-ignore
+        const userId = req.user.id;
+
+        if (!bvn || !selfie_url) {
+            return res.status(400).json({ success: false, message: "BVN and Selfie URL are required" });
+        }
+
+        const { kycService } = await import('../services/kycService.js');
+        const verification = await kycService.verifyFaceMatch(bvn, selfie_url);
+
+        if (verification.success) {
+            await pool.query(
+                `UPDATE customers 
+                 SET last_selfie_verified_at = NOW(), 
+                     is_identity_verified = true 
+                 WHERE id = $1`,
+                [userId]
+            );
+            
+            // @ts-ignore
+            req.user.last_selfie_verified_at = new Date();
+            // @ts-ignore
+            req.user.is_identity_verified = true;
+
+            return res.json({ success: true, message: "Identity verified successfully", confidence: verification.confidence });
+        } else {
+            return res.status(400).json({ success: false, message: verification.message, confidence: verification.confidence });
+        }
+    } catch (error: any) {
+        console.error("Error verifying identity:", error);
+        res.status(500).json({ success: false, message: "Verification failed due to a system error" });
     }
 });
 

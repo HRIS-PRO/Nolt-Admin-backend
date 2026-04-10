@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { investmentService } from '../services/investmentService.js';
 import { paystackService } from '../services/paystackService.js';
+import { zeptoService as emailService } from '../services/zeptoService.js';
 import pool from '../config/db.js';
 
 const router = Router();
@@ -81,6 +82,24 @@ router.post('/', isAuthenticated, async (req: any, res) => {
 
         const { giftToken } = req.body;
         const investment = await investmentService.createInvestment(userId, req.body, giftToken);
+
+        // Send Email Notification
+        try {
+            const userResult = await pool.query('SELECT full_name, email FROM customers WHERE id = $1', [userId]);
+            if (userResult.rows[0]) {
+                const customer = userResult.rows[0];
+                await emailService.sendInvestmentSuccessEmail(
+                    customer.email,
+                    customer.full_name,
+                    investment.id,
+                    req.body.investment_amount
+                );
+            }
+        } catch (emailError) {
+            console.error("Failed to send investment success email", emailError);
+            // Don't fail the overall request if the email fails.
+        }
+
         res.status(201).json(investment);
     } catch (error: any) {
         console.error("Create Investment Error:", error);
@@ -198,13 +217,13 @@ router.get('/verify-gift', isAuthenticated, async (req: any, res) => {
                 AND currency = $2 
                 AND is_active = TRUE
                 AND $4 >= min_amount AND (max_amount IS NULL OR $4 <= max_amount)
-                ORDER BY ABS(tenure_months - $3) ASC, created_at DESC LIMIT 1;
+                ORDER BY ABS(tenure_days - $3) ASC, created_at DESC LIMIT 1;
             `;
             const rateResult = await pool.query(query, [plan, currency, tenure, amount]);
             const interestRate = rateResult.rows[0]?.interest_rate || 0;
 
             const insertQuery = `
-                INSERT INTO investment_gifts (gifter_id, recipient_email, plan_name, amount, tenure_months, currency, interest_rate, payment_reference, status)
+                INSERT INTO investment_gifts (gifter_id, recipient_email, plan_name, amount, tenure_days, currency, interest_rate, payment_reference, status)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'paid')
                 ON CONFLICT (payment_reference) DO UPDATE 
                 SET interest_rate = EXCLUDED.interest_rate
@@ -366,7 +385,11 @@ router.post('/:id/liquidate', isAuthenticated, async (req: any, res) => {
 
         if (new Date() < maturityDate) {
             isEarly = true;
-            penaltyAmount = requestAmount * 0.10; // 10% penalty
+            const msElapsed = Math.max(0, new Date().getTime() - createdDate.getTime());
+            const daysElapsed = msElapsed / (1000 * 60 * 60 * 24);
+            const rate = Number(investment.interest_rate) || 0;
+            const accruedInterest = requestAmount * (rate / 100) * (daysElapsed / 365);
+            penaltyAmount = accruedInterest * 0.30; // 30% of accrued interest
         }
 
         // Mutate the record

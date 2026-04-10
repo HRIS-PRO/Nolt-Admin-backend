@@ -46,5 +46,41 @@ export const paystackService = {
         );
 
         return response.data;
+    },
+
+    /**
+     * Get list of banks
+     */
+    async getBanks() {
+        if (!PAYSTACK_SECRET) throw new Error("Paystack Secret Key not configured");
+
+        const response = await axios.get(
+            `${PAYSTACK_BASE_URL}/bank?country=nigeria`,
+            {
+                headers: {
+                    Authorization: `Bearer ${PAYSTACK_SECRET}`
+                }
+            }
+        );
+
+        return response.data;
+    },
+
+    /**
+     * Resolve Account Number
+     */
+    async resolveAccountNumber(account_number: string, bank_code: string) {
+        if (!PAYSTACK_SECRET) throw new Error("Paystack Secret Key not configured");
+
+        const response = await axios.get(
+            `${PAYSTACK_BASE_URL}/bank/resolve?account_number=${account_number}&bank_code=${bank_code}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${PAYSTACK_SECRET}`
+                }
+            }
+        );
+
+        return response.data;
     }
 };

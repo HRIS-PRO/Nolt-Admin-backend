@@ -4,7 +4,7 @@ export interface YieldRate {
     id?: number;
     plan_name: string;
     currency: string;
-    tenure_months: number;
+    tenure_days: number;
     min_amount: number;
     max_amount: number | null;
     interest_rate: number;
@@ -42,14 +42,14 @@ export const yieldRateService = {
 
     async createRate(data: Partial<YieldRate>) {
         const query = `
-            INSERT INTO yield_rates (plan_name, currency, tenure_months, min_amount, max_amount, interest_rate)
+            INSERT INTO yield_rates (plan_name, currency, tenure_days, min_amount, max_amount, interest_rate)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *;
         `;
         const values = [
             data.plan_name,
             data.currency,
-            data.tenure_months,
+            data.tenure_days,
             data.min_amount,
             data.max_amount,
             data.interest_rate
@@ -75,7 +75,7 @@ export const yieldRateService = {
             UPDATE yield_rates
             SET plan_name = COALESCE($1, plan_name),
                 currency = COALESCE($2, currency),
-                tenure_months = COALESCE($3, tenure_months),
+                tenure_days = COALESCE($3, tenure_days),
                 min_amount = COALESCE($4, min_amount),
                 max_amount = $5, -- Allow explicit NULL for infinity
                 interest_rate = COALESCE($6, interest_rate),
@@ -87,7 +87,7 @@ export const yieldRateService = {
         const values = [
             data.plan_name,
             data.currency,
-            data.tenure_months,
+            data.tenure_days,
             data.min_amount,
             data.max_amount,
             data.interest_rate,
@@ -105,25 +105,25 @@ export const yieldRateService = {
     },
 
     async getActiveRates() {
-        const query = `SELECT * FROM yield_rates WHERE is_active = TRUE ORDER BY tenure_months ASC;`;
+        const query = `SELECT * FROM yield_rates WHERE is_active = TRUE ORDER BY tenure_days ASC;`;
         const result = await pool.query(query);
         return result.rows;
     },
 
-    async calculateRate(params: { plan_name: string, currency: string, amount: number, tenure_months: number }) {
+    async calculateRate(params: { plan_name: string, currency: string, amount: number, tenure_days: number }) {
         const query = `
             SELECT * FROM yield_rates 
             WHERE (plan_name ILIKE '%' || $1 || '%')
             AND currency = $2 
-            AND tenure_months >= $3 
+            AND tenure_days >= $3 
             AND is_active = TRUE
             AND $4 >= min_amount 
             AND (max_amount IS NULL OR $4 <= max_amount)
-            ORDER BY tenure_months ASC, created_at DESC 
+            ORDER BY tenure_days ASC, created_at DESC 
             LIMIT 1;
         `;
-        const values = [params.plan_name, params.currency, params.tenure_months, params.amount];
+        const values = [params.plan_name, params.currency, params.tenure_days, params.amount];
         const result = await pool.query(query, values);
         return result.rows[0];
     }
-};
+};;
