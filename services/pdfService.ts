@@ -1,5 +1,8 @@
 import PDFDocument from 'pdfkit';
 import { supabase } from '../config/supabase.js';
+import axios from 'axios';
+
+const LOGO_URL = 'https://noltfinance.s3.us-east-1.amazonaws.com/logo+updated+white.png';
 
 export const pdfService = {
   /**
@@ -25,7 +28,40 @@ export const pdfService = {
         const buffers: Buffer[] = [];
         doc.on('data', buffers.push.bind(buffers));
 
-        // Start Document Construction
+        // 1. Fetch Logo Image
+        let logoBuffer: Buffer | null = null;
+        try {
+          const response = await axios.get(LOGO_URL, { responseType: 'arraybuffer' });
+          logoBuffer = Buffer.from(response.data);
+        } catch (logoErr) {
+          console.error("Failed to fetch logo for PDF:", logoErr);
+        }
+
+        // 2. High-Quality Header (Dark Theme matching Investment Certificate)
+        // Background Rectangle for Header
+        doc.rect(0, 0, 595.28, 120).fill('#0F172A');
+
+        if (logoBuffer) {
+          doc.image(logoBuffer, 50, 40, { height: 40 });
+        } else {
+          doc
+            .fillColor('#FFFFFF')
+            .font('Helvetica-Bold')
+            .fontSize(24)
+            .text('NOLT', 50, 45, { characterSpacing: 2 });
+        }
+
+        doc
+          .fillColor('#38BDF8') // Light blue accent
+          .font('Helvetica-Bold')
+          .fontSize(8)
+          .text('ELECTRONIC MAIL INDEMNITY', 50, 85, { characterSpacing: 1.5 });
+
+        // Reset for body
+        doc.fillColor('#000000').font('Helvetica').fontSize(11).lineGap(4);
+        doc.moveDown(8); // Move past header
+
+        // Start Body
         doc
           .font('Helvetica-Bold')
           .fontSize(16)
