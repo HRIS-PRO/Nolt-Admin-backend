@@ -132,4 +132,67 @@ router.delete('/:id', isStaff, async (req: any, res) => {
     }
 });
 
+// ==========================================
+// AUTHENTICATED: Update promotion
+// ==========================================
+router.put('/:id', isStaff, async (req: any, res) => {
+    const { id } = req.params;
+    const {
+        utm_campaign,
+        target_product,
+        utm_source,
+        utm_medium,
+        benefit_value,
+        expiry_date,
+        max_redemptions
+    } = req.body;
+
+    if (!utm_campaign || !target_product) {
+        return res.status(400).json({ message: "utm_campaign and target_product are required." });
+    }
+
+    try {
+        // Enforce product types
+        const allowedProducts = ['NOLT_RISE', 'NOLT_VAULT', 'NOLT_SURGE', 'ALL_PRODUCTS'];
+        if (!allowedProducts.includes(target_product)) {
+            return res.status(400).json({ message: "Invalid target_product" });
+        }
+
+        const updateResult = await pool.query(`
+            UPDATE promotions 
+            SET utm_campaign = $1, 
+                target_product = $2, 
+                utm_source = $3, 
+                utm_medium = $4, 
+                benefit_value = $5, 
+                expiry_date = $6, 
+                max_redemptions = $7,
+                updated_at = NOW()
+            WHERE id = $8
+            RETURNING *;
+        `, [
+            utm_campaign,
+            target_product,
+            utm_source || null,
+            utm_medium || null,
+            benefit_value || null,
+            expiry_date || null,
+            max_redemptions || null,
+            id
+        ]);
+
+        if (updateResult.rows.length === 0) {
+            return res.status(404).json({ message: "Promotion not found." });
+        }
+
+        res.json(updateResult.rows[0]);
+    } catch (error: any) {
+        if (error.code === '23505') {
+            return res.status(400).json({ message: "utm_campaign already exists. Please use a unique code." });
+        }
+        console.error("Error updating promotion:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
 export default router;

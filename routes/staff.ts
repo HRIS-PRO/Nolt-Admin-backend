@@ -1637,14 +1637,37 @@ router.patch('/investments/:id/assign', async (req, res) => {
         return res.status(403).json({ message: "Only Managers, Admins and CX can reassign investments." });
     }
 
-    if (!sales_officer_id) {
-        return res.status(400).json({ message: "Target Sales Officer ID is required." });
-    }
+    const isUnassign = !sales_officer_id || sales_officer_id === 'unassign';
 
     try {
         const investmentResult = await pool.query('SELECT sales_officer_id, customer_id FROM investments WHERE id = $1', [id]);
         const investment = investmentResult.rows[0];
         if (!investment) return res.status(404).json({ message: "Investment not found" });
+
+        if (isUnassign) {
+            if (!investment.sales_officer_id) {
+                return res.json({ message: "Investment is already unassigned." });
+            }
+
+            // Perform Unassignment
+            await pool.query(
+                'UPDATE investments SET sales_officer_id = NULL, updated_at = NOW() WHERE id = $1',
+                [id]
+            );
+
+            // Log Activity
+            await pool.query(
+                `INSERT INTO investment_activities (investment_id, user_id, action_type, description, metadata)
+                 VALUES ($1, $2, 'unassign_officer', $3, $4)`,
+                [
+                    id, user.id,
+                    `Unassigned from previous officer`,
+                    JSON.stringify({ from: investment.sales_officer_id, to: null, updatedBy: user.email })
+                ]
+            );
+
+            return res.json({ message: "Investment unassigned successfully" });
+        }
 
         const officerResult = await pool.query('SELECT id, email, full_name FROM customers WHERE id = $1', [sales_officer_id]);
         const newOfficer = officerResult.rows[0];
