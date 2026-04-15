@@ -38,7 +38,7 @@ export const investmentService = {
                     company_profile_url, status_report_url,
                     is_minor_beneficiary, guardian_confirmed,
                     is_top_up, original_investment_id, casa_account_number,
-                    sales_officer_id, referral_code, indemnity_document_url
+                    sales_officer_id, referral_code, indemnity_document_url, promotion_id
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17,
@@ -50,7 +50,7 @@ export const investmentService = {
                     $48, $49, $50, $51, $52, $53, $54, $55, $56, $57,
                     $58, $59,
                     $60, $61, $62,
-                    $63, $64, $65
+                    $63, $64, $65, $66
                 )
                 RETURNING *
             `;
@@ -98,9 +98,10 @@ export const investmentService = {
                 data.is_top_up || false,
                 data.original_investment_id || null,
                 data.casa_account_number || null,
-                null, // placeholder for sales_officer_id
-                data.referral_code || null,
-                null // placeholder for indemnity_document_url
+                null, // placeholder for sales_officer_id (62)
+                data.referral_code || null, // (63)
+                null, // placeholder for indemnity_document_url (64)
+                null  // placeholder for promotion_id (65)
             ];
 
             // 1. Referral Logic
@@ -123,12 +124,22 @@ export const investmentService = {
                 }
             }
 
+            let promotionId = null;
+            if (effectiveReferralCode) {
+                const promoCheck = await client.query('SELECT id FROM promotions WHERE unique_code = $1 OR utm_campaign = $1 LIMIT 1', [effectiveReferralCode]);
+                if (promoCheck.rows[0]) {
+                    promotionId = promoCheck.rows[0].id;
+                    await client.query('UPDATE promotions SET current_redemptions = current_redemptions + 1 WHERE id = $1', [promotionId]);
+                }
+            }
+
             // 2. Round Robin Logic REMOVED for Marketing Attribution
             // If there's no referral code, the sales_officer_id remains null so marketing can view it
 
             // Update assigned values in array
             values[62] = assignedOfficerId;
             values[63] = effectiveReferralCode || null;
+            values[65] = promotionId;
 
             // Generate Indemnity Document if signatures exist
             let indemnityUrl = null;
@@ -228,18 +239,20 @@ export const investmentService = {
         return result.rows;
     },
 
-    getAllInvestments: async (options?: { officerId?: number; unassignedOnly?: boolean }) => {
+    getAllInvestments: async (options?: { officerId?: number; unassignedOnly?: boolean; promoOnly?: boolean }) => {
         let query = `
             SELECT i.*, 
                    c.full_name as customer_name, c.email as customer_email,
                    CASE WHEN ig.id IS NOT NULL THEN true ELSE false END as is_gift,
                    gc.full_name as gifter_name,
-                   staff.full_name as officer_name, staff.email as officer_email
+                   staff.full_name as officer_name, staff.email as officer_email,
+                   p.utm_source as promotion_source
             FROM investments i
             LEFT JOIN customers c ON i.customer_id = c.id
             LEFT JOIN customers staff ON i.sales_officer_id = staff.id
             LEFT JOIN investment_gifts ig ON i.id = ig.investment_id
             LEFT JOIN customers gc ON ig.gifter_id = gc.id
+            LEFT JOIN promotions p ON i.promotion_id = p.id OR i.referral_code = p.utm_campaign
             WHERE 1=1
         `;
         let values: any[] = [];
@@ -249,6 +262,10 @@ export const investmentService = {
             values.push(options.officerId);
         } else if (options?.unassignedOnly) {
             query += ` AND i.sales_officer_id IS NULL`;
+        }
+
+        if (options?.promoOnly) {
+            query += ` AND p.utm_campaign IS NOT NULL`;
         }
         
         query += ` ORDER BY i.created_at DESC`;

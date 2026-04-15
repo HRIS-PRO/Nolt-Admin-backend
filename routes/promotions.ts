@@ -16,7 +16,7 @@ const isStaff = (req: any, res: any, next: any) => {
 // PUBLIC: Track Click
 // ==========================================
 router.post('/click', async (req, res) => {
-    const { campaignCode } = req.body;
+    const { campaignCode, source, medium, targetProduct } = req.body;
     if (!campaignCode) {
         return res.status(400).json({ message: "Missing campaignCode" });
     }
@@ -26,8 +26,11 @@ router.post('/click', async (req, res) => {
             UPDATE promotions
             SET current_redemptions = current_redemptions + 1
             WHERE utm_campaign = $1
+              AND COALESCE(utm_source, '') = COALESCE($2, '')
+              AND COALESCE(utm_medium, '') = COALESCE($3, '')
+              AND (target_product = $4 OR $4 IS NULL)
             RETURNING *;
-        `, [campaignCode]);
+        `, [campaignCode, source || '', medium || '', targetProduct || null]);
 
         if (updateResult.rows.length > 0) {
             const promo = updateResult.rows[0];
@@ -78,32 +81,65 @@ router.post('/', isStaff, async (req: any, res) => {
 
     try {
         // Enforce product types
-        const allowedProducts = ['NOLT_RISE', 'NOLT_VAULT', 'NOLT_SURGE', 'ALL_PRODUCTS'];
+        const allowedProducts = ['NOLT_RISE', 'NOLT_VAULT', 'NOLT_SURGE', 'ALL_PRODUCTS', 'LOAN', 'PUBLIC_SECTOR_LOAN'];
         if (!allowedProducts.includes(target_product)) {
             return res.status(400).json({ message: "Invalid target_product" });
         }
 
-        const insertResult = await pool.query(`
-            INSERT INTO promotions (
-                utm_campaign, target_product, utm_source, utm_medium, 
-                benefit_value, expiry_date, max_redemptions
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *;
-        `, [
-            utm_campaign,
-            target_product,
-            utm_source || null,
-            utm_medium || null,
-            benefit_value || null,
-            expiry_date || null,
-            max_redemptions || null
-        ]);
+        const generateUniqueCode = () => {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let result = '';
+            for (let i = 0; i < 5; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
+        };
 
-        res.status(201).json(insertResult.rows[0]);
-    } catch (error: any) {
-        if (error.code === '23505') {
-            return res.status(400).json({ message: "utm_campaign already exists. Please use a unique code." });
+        let uniqueCode = generateUniqueCode();
+        let isInserted = false;
+        let attempts = 0;
+        let insertResult;
+
+        while (!isInserted && attempts < 10) {
+            try {
+                insertResult = await pool.query(`
+                    INSERT INTO promotions (
+                        utm_campaign, target_product, utm_source, utm_medium, 
+                        benefit_value, expiry_date, max_redemptions, unique_code
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING *;
+                `, [
+                    utm_campaign,
+                    target_product,
+                    utm_source || null,
+                    utm_medium || null,
+                    benefit_value || null,
+                    expiry_date || null,
+                    max_redemptions || null,
+                    uniqueCode
+                ]);
+                isInserted = true;
+            } catch (err: any) {
+                if (err.code === '23505') {
+                    if (err.constraint === 'promotions_unique_code_key') {
+                        uniqueCode = generateUniqueCode();
+                        attempts++;
+                    } else {
+                        // For the composite key tracking we might still want to prevent identical params
+                        return res.status(400).json({ message: "This specific combination of campaign name, source, medium, and product already exists." });
+                    }
+                } else {
+                    throw err;
+                }
+            }
         }
+
+        if (!isInserted) {
+            return res.status(500).json({ message: "Failed to generate unique code for promotion." });
+        }
+
+        res.status(201).json(insertResult?.rows[0]);
+    } catch (error: any) {
         console.error("Error creating promotion:", error);
         res.status(500).json({ message: "Internal server error" });
     }
@@ -128,6 +164,69 @@ router.delete('/:id', isStaff, async (req: any, res) => {
         res.json({ message: "Promotion deleted successfully.", promotion: deleteResult.rows[0] });
     } catch (error) {
         console.error("Error deleting promotion:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// ==========================================
+// AUTHENTICATED: Update promotion
+// ==========================================
+router.put('/:id', isStaff, async (req: any, res) => {
+    const { id } = req.params;
+    const {
+        utm_campaign,
+        target_product,
+        utm_source,
+        utm_medium,
+        benefit_value,
+        expiry_date,
+        max_redemptions
+    } = req.body;
+
+    if (!utm_campaign || !target_product) {
+        return res.status(400).json({ message: "utm_campaign and target_product are required." });
+    }
+
+    try {
+        // Enforce product types
+        const allowedProducts = ['NOLT_RISE', 'NOLT_VAULT', 'NOLT_SURGE', 'ALL_PRODUCTS'];
+        if (!allowedProducts.includes(target_product)) {
+            return res.status(400).json({ message: "Invalid target_product" });
+        }
+
+        const updateResult = await pool.query(`
+            UPDATE promotions 
+            SET utm_campaign = $1, 
+                target_product = $2, 
+                utm_source = $3, 
+                utm_medium = $4, 
+                benefit_value = $5, 
+                expiry_date = $6, 
+                max_redemptions = $7,
+                updated_at = NOW()
+            WHERE id = $8
+            RETURNING *;
+        `, [
+            utm_campaign,
+            target_product,
+            utm_source || null,
+            utm_medium || null,
+            benefit_value || null,
+            expiry_date || null,
+            max_redemptions || null,
+            id
+        ]);
+
+        if (updateResult.rows.length === 0) {
+            return res.status(404).json({ message: "Promotion not found." });
+        }
+
+        res.json(updateResult.rows[0]);
+    } catch (error: any) {
+        if (error.code === '23505') {
+            return res.status(400).json({ message: "This specific combination of campaign name, source, medium, and product already exists." });
+        }
+        console.error("Error updating promotion:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
