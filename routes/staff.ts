@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import pool from '../config/db.js';
-import { zeptoService as resendService, zeptoService } from '../services/zeptoService.js';
+import { zeptoService } from '../services/zeptoService.js';
 import { exportService } from '../services/exportService.js';
 import bcrypt from 'bcrypt';
 import multer from 'multer';
@@ -1031,8 +1031,21 @@ router.get('/reports/tat-summary', async (req, res) => {
     }
 
     try {
-        const { type = 'LOAN' } = req.query; // 'LOAN' or 'INVESTMENT'
+        const { type = 'LOAN', period = 'this_month' } = req.query; // 'LOAN' or 'INVESTMENT'
         const isLoan = type === 'LOAN';
+
+        let dateFilter = '';
+        if (period === 'this_week') {
+            dateFilter = "created_at >= date_trunc('week', now())";
+        } else if (period === 'last_week') {
+            dateFilter = "created_at >= date_trunc('week', now()) - interval '1 week' AND created_at < date_trunc('week', now())";
+        } else if (period === 'this_month') {
+            dateFilter = "created_at >= date_trunc('month', now())";
+        } else if (period === 'last_month') {
+            dateFilter = "created_at >= date_trunc('month', now()) - interval '1 month' AND created_at < date_trunc('month', now())";
+        } else if (period === 'this_year') {
+            dateFilter = "created_at >= date_trunc('year', now())";
+        }
 
         // 1. Fetch Basic Metrics
         const table = isLoan ? 'loans' : 'investments';
@@ -1046,6 +1059,7 @@ router.get('/reports/tat-summary', async (req, res) => {
                 COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
                 SUM(${amountField}) FILTER (WHERE status IN ($1, 'pending')) as total_volume
             FROM ${table}
+            ${dateFilter ? `WHERE ${dateFilter}` : ''}
         `, [approvedStatus]);
 
         const metrics = metricsRes.rows[0];
@@ -1066,12 +1080,25 @@ router.get('/reports/tat-summary', async (req, res) => {
         const activityTable = isLoan ? 'loan_activities' : 'investment_activities';
         const idField = isLoan ? 'loan_id' : 'investment_id';
 
-        const recentAppsRes = await pool.query(`
-            SELECT id, ${amountField} as amount, customer_id, created_at, ${isLoan ? 'loan_type' : 'status'} as sub_type
-            FROM ${table} 
-            ORDER BY created_at DESC 
-            LIMIT 200
-        `);
+        let recentAppsRes;
+        if (isLoan) {
+            recentAppsRes = await pool.query(`
+                SELECT id, ${amountField} as amount, applicant_full_name as full_name, created_at, loan_type as sub_type
+                FROM loans 
+                ${dateFilter ? `WHERE ${dateFilter}` : ''}
+                ORDER BY created_at DESC 
+                LIMIT 500
+            `);
+        } else {
+            recentAppsRes = await pool.query(`
+                SELECT i.id, i.${amountField} as amount, c.full_name, i.created_at, i.investment_type as sub_type
+                FROM investments i
+                LEFT JOIN customers c ON i.customer_id = c.id
+                ${dateFilter ? `WHERE ${dateFilter.replace(/created_at/g, 'i.created_at')}` : ''}
+                ORDER BY i.created_at DESC 
+                LIMIT 500
+            `);
+        }
         const recentApps = recentAppsRes.rows;
         const recentIds = recentApps.map(r => r.id);
 
@@ -1168,7 +1195,7 @@ router.get('/reports/tat-summary', async (req, res) => {
                 appPerformance.push({
                     id: appId,
                     ref: `${isLoan ? 'L' : 'I'}-${appId}`,
-                    name: `Customer #${app.customer_id}`, // Masked for GDPR, but could join user table as well
+                    name: app.full_name || 'Legacy Customer',
                     amount: app.amount,
                     tatHours: parseFloat(totalTatHours.toFixed(2)),
                     type: app.sub_type || 'Standard',
@@ -1401,6 +1428,7 @@ router.get('/loans', async (req, res) => {
     try {
         const { page = 1, limit = 10, search = '', status = '', stage = '', officer = '' } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
+        const role = (req.user as any)?.role?.toLowerCase?.() || '';
 
         // Build Filters
         const filters: string[] = [];
@@ -1434,6 +1462,11 @@ router.get('/loans', async (req, res) => {
             values.push('finance');
         }
 
+        if (role === 'marketing' || role === 'customer_experience') {
+            // CX and Marketing are restricted to promo-attributed applications only.
+            filters.push(`p.utm_campaign IS NOT NULL`);
+        }
+
         if (typeof search === 'string' && search) {
             const searchPattern = `%${search}%`;
             filters.push(`(
@@ -1460,9 +1493,11 @@ router.get('/loans', async (req, res) => {
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
                 l.loan_type, l.topup_amount, l.buy_over_amount, l.disbursement_amount, l.disb_date,
-                c.full_name as officer_name, c.email as officer_email, l.sales_officer_id
+                c.full_name as officer_name, c.email as officer_email, l.sales_officer_id,
+                p.utm_source as promotion_source
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
+            LEFT JOIN promotions p ON l.referral_code = p.utm_campaign
             ${whereClause}
             ORDER BY l.created_at DESC
             LIMIT $${paramIndex++} OFFSET $${paramIndex++}
@@ -1474,6 +1509,7 @@ router.get('/loans', async (req, res) => {
             SELECT COUNT(l.id) as total
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
+            LEFT JOIN promotions p ON l.referral_code = p.utm_campaign
             ${whereClause}
         `;
         // Count query uses the same values as filter, but not limit/offset
@@ -1515,7 +1551,7 @@ router.get('/investments', async (req: any, res) => {
         
         const options = {
             officerId: role === 'sales_officer' ? req.user.id : undefined,
-            unassignedOnly: role === 'marketing'
+            promoOnly: role === 'marketing' || role === 'customer_experience'
         };
         
         const investments = await investmentService.getAllInvestments(options);
@@ -1547,18 +1583,24 @@ router.get('/investments', async (req: any, res) => {
 router.get('/investments/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const role = (req.user as any)?.role?.toLowerCase?.() || '';
         if (!id || id === 'null' || isNaN(Number(id))) {
             return res.status(400).json({ message: "Invalid investment ID format" });
         }
         const query = `
             SELECT i.*, 
                    c.full_name as customer_name, c.email as customer_email, c.avatar_url, c.is_active as customer_active,
+                   c.has_failed_selfie,
                    staff.full_name as officer_name, staff.email as officer_email, staff.avatar_url as officer_avatar,
-                   up.bank_name, up.account_number, up.account_name
+                   up.bank_name, up.account_number, up.account_name, up.is_identity_verified,
+                   p.utm_source as promotion_source, p.utm_medium as promotion_medium, p.utm_campaign as promotion_campaign,
+                   m.hear_about_us, m.referral_code as marketing_referral, m.officer_name as marketing_officer
             FROM investments i
             LEFT JOIN customers c ON i.customer_id = c.id
             LEFT JOIN user_profiles up ON c.id = up.user_id
             LEFT JOIN customers staff ON i.sales_officer_id = staff.id
+            LEFT JOIN promotions p ON i.promotion_id = p.id OR i.referral_code = p.utm_campaign
+            LEFT JOIN marketing m ON i.customer_id = m.customer_id
             WHERE i.id = $1
         `;
         const result = await pool.query(query, [id]);
@@ -1568,6 +1610,9 @@ router.get('/investments/:id', async (req, res) => {
         }
 
         const investment = result.rows[0];
+        if ((role === 'marketing' || role === 'customer_experience') && !investment.promotion_source) {
+            return res.status(404).json({ message: "Investment not found" });
+        }
 
         if (!investment.casa_account_number && investment.customer_id) {
             const casaRes = await pool.query(`
@@ -1631,7 +1676,7 @@ router.patch('/investments/:id/assign', async (req, res) => {
 
     if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    // Permission Check: Sales Manager, Admin, Super Admin, Customer Experience
+    // Permission Check: Sales Manager, Admin, Super Admin, Customer Experience, Marketing
     const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin', 'customer_experience'];
     if (!allowedRoles.includes(user.role)) {
         return res.status(403).json({ message: "Only Managers, Admins and CX can reassign investments." });
@@ -1786,14 +1831,20 @@ router.post('/investments/:id/indemnity', isStaff, async (req, res) => {
  *     summary: Approve or reject an investment to move it through the pipeline
  *     tags: [Staff]
  */
-router.put('/investments/:id/action', async (req, res) => {
+router.put('/investments/:id/action', isAuthenticated, isStaff, async (req: AuthRequest, res: Response) => {
     try {
-        const { id } = req.params;
+        const id = req.params.id as string;
         const { action } = req.body; // 'approve' or 'reject'
         const user = req.user as any;
         const role = user.role;
 
-        const investmentRes = await pool.query(`SELECT status, stage FROM investments WHERE id = $1`, [id]);
+        const investmentRes = await pool.query(`
+            SELECT i.status, i.stage, i.customer_id, i.rep_full_name, i.company_name, i.customer_name, 
+                   c.email as cust_email, c.full_name as cust_full_name 
+            FROM investments i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            WHERE i.id = $1
+        `, [id]);
         if (investmentRes.rows.length === 0) return res.status(404).json({ message: "Investment not found" });
 
         const investment = investmentRes.rows[0];
@@ -1838,7 +1889,7 @@ router.put('/investments/:id/action', async (req, res) => {
                     const cxEmails = cxRes.rows.map(r => r.email);
                     if (cxEmails.length > 0) {
                         const applicantName = investment.company_name || investment.rep_full_name || investment.customer_name || 'Individual';
-                        await zeptoService.sendCASARequestNotification(cxEmails, id, applicantName);
+                        await zeptoService.sendCASARequestNotification(cxEmails, id as string, applicantName);
                     }
                 } catch (emailErr) {
                     console.error("Failed to sequence CASA email request:", emailErr);
@@ -1880,7 +1931,9 @@ router.put('/investments/:id/action', async (req, res) => {
                         maturityDate: matDate,
                         interestAmount: interestAmtStr,
                         whtAmount: whtAmtStr,
-                        maturityValue: maturityValueStr
+                        maturityValue: maturityValueStr,
+                        investmentType: upInv.investment_type || 'NOLT Investment',
+                        id: id as string
                     });
 
                     console.log(`[Cert Trigger] Certificate dispatch successful for ${id} upon approval. Result:`, emailResult);
@@ -1911,12 +1964,25 @@ router.put('/investments/:id/action', async (req, res) => {
                     const notifyRes = await pool.query(`SELECT email FROM customers WHERE role = $1 AND is_active = true`, [roleToNotify]);
                     const emails = notifyRes.rows.map(r => r.email);
                     if (emails.length > 0) {
-                        const applicantName = investment.company_name || investment.rep_full_name || investment.customer_name || 'Individual';
-                        await zeptoService.sendInvestmentNotification(emails, id, applicantName, `Action Required: Application awaiting ${newStage.replace('_', ' ')} approval.`);
+                        const applicantName = investment.company_name || investment.rep_full_name || investment.cust_full_name || 'Individual';
+                        await zeptoService.sendInvestmentNotification(emails, id as string, applicantName, `Action Required: Application awaiting ${newStage.replace('_', ' ')} approval.`);
                     }
                 } catch (emailErr) {
                     console.error("Failed to send stage notification email:", emailErr);
                 }
+            }
+        }
+
+        // --- Notify Customer of Stage Change ---
+        if (investment.stage !== newStage || investment.status !== newStatus) {
+            try {
+                const customerEmail = investment.cust_email;
+                const customerName = investment.company_name || investment.rep_full_name || investment.cust_full_name || 'Individual';
+                if (customerEmail) {
+                    await zeptoService.sendInvestmentStageUpdateEmail(customerEmail, customerName, id as string, newStage, newStatus);
+                }
+            } catch (custEmailErr) {
+                console.error("Failed to send customer stage update email:", custEmailErr);
             }
         }
 
@@ -2082,7 +2148,9 @@ router.put('/investments/:id/casa', isAuthenticated, isStaff, async (req: AuthRe
                     maturityDate: matDate,
                     interestAmount: interestAmtStr,
                     whtAmount: whtAmtStr,
-                    maturityValue: maturityValueStr
+                    maturityValue: maturityValueStr,
+                    investmentType: investment.investment_type || 'NOLT Investment',
+                    id: String(id)
                 });
 
                 console.log(`[Cert Trigger] Certificate dispatch successful for ${id}. Result:`, emailResult);
@@ -2431,19 +2499,31 @@ router.get('/customers/:id', async (req, res) => {
                 up.bank_name as up_bank, up.account_number as up_account, up.account_name as up_name,
                 up.bank_statement_url, up.is_corporate_account, up.bank_verified,
                 up.bvn as up_bvn, up.nin as up_nin, up.date_of_birth as up_dob, up.phone_number as up_phone,
+                up.is_identity_verified, 
+                COALESCE(l.selfie_verification_url, inv.rep_selfie_url) as selfie_verification_url,
                 l.mobile_number, l.state_of_residence, l.mda_tertiary as employer,
-                COALESCE(up.bvn, l.bvn) as bvn, COALESCE(up.nin, l.nin) as nin, COALESCE(up.date_of_birth, l.date_of_birth) as date_of_birth, l.primary_home_address,
+                COALESCE(up.bvn, l.bvn, inv.rep_bvn) as bvn, 
+                COALESCE(up.nin, l.nin, inv.rep_nin) as nin, 
+                COALESCE(up.date_of_birth, l.date_of_birth, inv.dob) as date_of_birth, 
+                COALESCE(l.primary_home_address, inv.company_address) as primary_home_address,
                 COALESCE(up.bank_name, l.bank_name) as bank_name, 
                 COALESCE(up.account_number, l.account_number) as account_number, 
                 COALESCE(up.account_name, l.account_name) as account_name,
-                l.gender, l.marital_status, l.religion, l.state_of_origin,
+                COALESCE(l.gender, inv.gender) as gender, 
+                COALESCE(l.marital_status, inv.marital_status) as marital_status, 
+                COALESCE(l.religion, inv.religion) as religion, 
+                COALESCE(l.state_of_origin, inv.rep_state_of_origin) as state_of_origin,
                 l.residential_status, l.ippis_number, l.staff_id,
-                l.average_monthly_income, l.mda_tertiary
+                l.average_monthly_income, l.mda_tertiary,
+                p.utm_source as promotion_source, p.utm_medium as promotion_medium, p.utm_campaign as promotion_campaign,
+                m.hear_about_us, m.referral_code as marketing_referral, m.officer_name as marketing_officer
             FROM customers c
             LEFT JOIN user_profiles up ON c.id = up.user_id
-            LEFT JOIN loans l ON c.id = l.customer_id
+            LEFT JOIN (SELECT * FROM loans WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 1) l ON c.id = l.customer_id
+            LEFT JOIN (SELECT * FROM investments WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 1) inv ON c.id = inv.customer_id
+            LEFT JOIN promotions p ON (p.utm_campaign IN (COALESCE(l.referral_code, inv.referral_code)) OR p.unique_code IN (COALESCE(l.referral_code, inv.referral_code)))
+            LEFT JOIN marketing m ON c.id = m.customer_id
             WHERE c.id = $1
-            ORDER BY c.id, l.created_at DESC
         `, [id]);
 
         if (userResult.rows.length === 0) {
@@ -2457,13 +2537,24 @@ router.get('/customers/:id', async (req, res) => {
             SELECT * FROM loans WHERE customer_id = $1 ORDER BY created_at DESC
         `, [id]);
 
-        // Aggregate Documents from all loans (deduplicated by URL)
+        // Fetch Investments
+        const investmentsResult = await pool.query(`
+            SELECT * FROM investments WHERE customer_id = $1 ORDER BY created_at DESC
+        `, [id]);
+
+        // Aggregate Documents from Loans & Investments (deduplicated by URL)
         const documents: { type: string; url: string; date: string }[] = [];
-        const docTypes = ['govt_id_url', 'work_id_url', 'payslip_url', 'statement_of_account_url', 'proof_of_residence_url', 'selfie_verification_url'];
         const seenUrls = new Set();
+        
+        const loanDocTypes = ['govt_id_url', 'work_id_url', 'payslip_url', 'statement_of_account_url', 'proof_of_residence_url', 'selfie_verification_url'];
+        const invDocTypes = [
+            'cac_url', 'director_1_id_url', 'director_2_id_url', 'rep_selfie_url', 'rep_id_url', 
+            'memart_url', 'annual_returns_url', 'board_resolution_url', 'aml_cft_url',
+            'utility_bill_url', 'secondary_id_url', 'company_profile_url', 'status_report_url'
+        ];
 
         loansResult.rows.forEach((loan: any) => {
-            docTypes.forEach(type => {
+            loanDocTypes.forEach(type => {
                 if (loan[type] && !seenUrls.has(loan[type])) {
                     seenUrls.add(loan[type]);
                     documents.push({
@@ -2475,11 +2566,23 @@ router.get('/customers/:id', async (req, res) => {
             });
         });
 
-        console.log(`[DEBUG] Fetching customer ${id} details. Profile has gender: ${user.gender}, income: ${user.average_monthly_income}`);
+        investmentsResult.rows.forEach((inv: any) => {
+            invDocTypes.forEach(type => {
+                if (inv[type] && !seenUrls.has(inv[type])) {
+                    seenUrls.add(inv[type]);
+                    documents.push({
+                        type: type.replace('_url', '').replace(/_/g, ' ').toUpperCase(),
+                        url: inv[type],
+                        date: inv.created_at
+                    });
+                }
+            });
+        });
 
         res.json({
             profile: user,
             loans: loansResult.rows,
+            investments: investmentsResult.rows,
             documents
         });
 
@@ -2591,6 +2694,7 @@ router.put('/users/:id/role', isSuperAdmin, async (req, res) => {
  */
 router.get('/loans/:id', async (req, res) => {
     const { id } = req.params;
+    const role = (req.user as any)?.role?.toLowerCase?.() || '';
     try {
         const loans = await pool.query(`
             SELECT 
@@ -2610,18 +2714,25 @@ router.get('/loans/:id', async (req, res) => {
                 l.loan_type, -- Added loan type
                 
                 -- New Fields for TopUp/BuyOver
-                l.casa, l.topup_amount, l.buy_over_amount,
-                l.buy_over_company_name, l.buy_over_company_account_name, l.buy_over_company_account_number,
                 l.disb_date,
+                p.utm_source as promotion_source, p.utm_medium as promotion_medium, p.utm_campaign as promotion_campaign,
+                m.hear_about_us, m.referral_code as marketing_referral, m.officer_name as marketing_officer,
+                up.is_identity_verified,
 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
+            LEFT JOIN promotions p ON l.referral_code = p.utm_campaign OR l.referral_code = p.unique_code
+            LEFT JOIN marketing m ON l.customer_id = m.customer_id
+            LEFT JOIN user_profiles up ON l.customer_id = up.user_id
             WHERE l.id = $1
             LIMIT 1
         `, [id]);
 
         if (loans.rows.length === 0) {
+            return res.status(404).json({ message: "Loan not found" });
+        }
+        if ((role === 'marketing' || role === 'customer_experience') && !loans.rows[0].promotion_source) {
             return res.status(404).json({ message: "Loan not found" });
         }
 
@@ -3820,6 +3931,13 @@ router.post('/investments/application', isStaff, async (req, res) => {
         const io = getIO();
         io.emit('investment_new', { id: newInvestment.rows[0].id, customer_id: customerId });
 
+        // 4. Send Confirmation Email to Customer
+        try {
+            await zeptoService.sendInvestmentSuccessEmail(email, companyName || fullName || 'Individual', newInvestment.rows[0].id, amount);
+        } catch (emailErr) {
+            console.error("Failed to send investment success email:", emailErr);
+        }
+
         res.status(201).json({
             message: "Investment application created successfully",
             investment_id: newInvestment.rows[0].id,
@@ -3863,10 +3981,10 @@ router.patch('/loans/:id/assign', async (req, res) => {
 
     if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    // Permission Check: Sales Manager, Admin, Super Admin, Customer Experience
-    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin', 'customer_experience'];
+    // Permission Check: Sales Manager, Admin, Super Admin, Customer Experience, Marketing
+    const allowedRoles = ['sales_manager', 'admin', 'super_admin', 'superadmin', 'customer_experience', 'marketing'];
     if (!allowedRoles.includes(user.role)) {
-        return res.status(403).json({ message: "Only Managers, Admins and CX can reassign loans." });
+        return res.status(403).json({ message: "Only Managers, Admins, Marketing and CX can reassign loans." });
     }
 
     if (!sales_officer_id) {

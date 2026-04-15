@@ -56,7 +56,7 @@ export const zeptoService = {
                     </div>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error:", error);
             throw new Error(error.message || "Failed to send email via Zepto");
@@ -107,7 +107,7 @@ export const zeptoService = {
                     </div>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Welcome):", error);
             throw new Error(error.message || "Failed to send welcome email via Zepto");
@@ -200,7 +200,7 @@ export const zeptoService = {
                     </html>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Investment Notification):", error);
             return { error: error.message };
@@ -224,7 +224,7 @@ export const zeptoService = {
                 // Fetch the applicant name from the database using the provided loanId
                 const loanResult = await pool.query('SELECT applicant_full_name FROM loans WHERE id = $1', [loanId]);
                 if (loanResult.rows.length > 0) {
-                     applicantName = loanResult.rows[0].applicant_full_name;
+                    applicantName = loanResult.rows[0].applicant_full_name;
                 }
             } catch (dbError) {
                 console.error("Failed to fetch applicant for email template:", dbError);
@@ -327,7 +327,7 @@ export const zeptoService = {
                     </html>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Notification):", error);
             return { error: error.message };
@@ -410,7 +410,7 @@ export const zeptoService = {
                     </html>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Digest):", error);
             return { error: error.message };
@@ -456,7 +456,7 @@ export const zeptoService = {
                     </div>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Password Reset):", error);
             throw new Error(error.message || "Failed to send password reset email");
@@ -480,7 +480,7 @@ export const zeptoService = {
         try {
             const dashboardUrl = process.env.FRONTEND_URL || 'https://nolt-finance.vercel.app';
             const investmentUrl = `${dashboardUrl}/staff/investments/${investmentId}`;
-            
+
             const toRecipients = emails.map(email => ({
                 email_address: { address: email, name: "Customer Experience Team" }
             }));
@@ -505,7 +505,7 @@ export const zeptoService = {
                     </div>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (CASA Notification):", error);
             return { error: error.message };
@@ -528,9 +528,14 @@ export const zeptoService = {
             interestAmount: string,
             whtAmount: string,
             maturityValue: string,
+            investmentType: string,
+            id: string | number
         }
     ): Promise<SendEmailTokenResponse> => {
-        if (!ZEPTO_TOKEN) throw new Error("Missing Zepto API Key");
+        if (!ZEPTO_TOKEN) {
+            console.warn("Missing Zepto API Key, skipping certificate email.");
+            return { id: 'skipped-no-key' };
+        }
 
         try {
             const resp = await client.sendMail({
@@ -566,6 +571,11 @@ export const zeptoService = {
                                     <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">CERTIFIED INVESTOR</p>
                                     <h2 style="color: #0f172a; margin: 0; font-size: 24px; font-weight: 800;">${customerName}</h2>
                                     <p style="color: #38bdf8; font-size: 14px; font-weight: 700; margin: 4px 0 0 0;">CASA Account: <span style="letter-spacing: 0.5px;">${casaNumber}</span></p>
+                                    <p style="color: #64748b; font-size: 11px; font-weight: 700; margin: 8px 0 0 0; text-transform: uppercase; letter-spacing: 0.5px;">
+                                        ID: <span style="color: #0f172a; font-weight: 800;">INV-${investmentData.id}</span> 
+                                        <span style="margin: 0 10px; color: #cbd5e1;">|</span>
+                                        Plan: <span style="color: #0f172a; font-weight: 800;">${investmentData.investmentType}</span>
+                                    </p>
                                 </div>
                                 
                                 <p style="font-size: 15px; color: #475569; margin-bottom: 24px;">This document certifies that the above-named individual has successfully committed an investment with <strong>Nolt Finance Company Ltd</strong> under the following terms:</p>
@@ -630,7 +640,7 @@ export const zeptoService = {
                     </div>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Certificate):", error);
             throw new Error(error.message || "Failed to send certificate email");
@@ -684,9 +694,82 @@ export const zeptoService = {
                     </div>
                 `
             });
-            return { id: 'zepto-sent', ...resp };
+            return { id: 'zepto-sent', ...(resp as any) };
         } catch (error: any) {
             console.error("Zepto Service Error (Investment Success):", error);
+            return { error: error.message };
+        }
+    },
+
+    /**
+     * Sends an email to the customer on investment stage update
+     */
+    sendInvestmentStageUpdateEmail: async (
+        emailAddress: string,
+        name: string,
+        investmentId: string | number,
+        newStage: string,
+        status: string
+    ): Promise<SendEmailTokenResponse> => {
+        if (!ZEPTO_TOKEN) {
+            console.warn("Missing Zepto API Key, skipping investment stage update email.");
+            return { id: 'skipped-no-key' };
+        }
+
+        try {
+            const getFriendlyStage = (stage: string, status: string) => {
+                if (status === 'active') return 'Activated & Generating Certificate';
+                if (status === 'rejected') return 'Declined';
+                if (stage === 'compliance_review') return 'Internal Compliance Review';
+                if (stage === 'finance_review') return 'Treasury & Finance Verification';
+                if (stage === 'returned') return 'Returned for Correction';
+                return stage.replace(/_/g, ' ');
+            };
+
+            const friendlyStage = getFriendlyStage(newStage, status);
+            const isNegative = status === 'rejected' || newStage === 'returned';
+
+            const resp = await client.sendMail({
+                from: {
+                    address: ZEPTO_FROM_EMAIL,
+                    name: ZEPTO_FROM_NAME
+                },
+                to: [
+                    {
+                        email_address: {
+                            address: emailAddress,
+                            name: name
+                        }
+                    }
+                ],
+                subject: `Investment Update: INV-${investmentId} - ${friendlyStage}`,
+                htmlbody: `
+                    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+                        <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                            <h2 style="color: #111827; margin-top: 0;">Hello ${name},</h2>
+                            <p style="color: #4b5563; line-height: 1.6;">Your investment application status has been updated.</p>
+                            
+                            <div style="background-color: ${isNegative ? '#fef2f2' : '#f0f9ff'}; border-left: 4px solid ${isNegative ? '#ef4444' : '#0ea5e9'}; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                                <p style="margin: 0; color: #374151;"><strong>Investment ID:</strong> INV-${investmentId}</p>
+                                <p style="margin: 8px 0 0 0; color: #374151;"><strong>Current Stage:</strong> <span style="text-transform: uppercase; font-weight: 800; color: ${isNegative ? '#b91c1c' : '#0369a1'};">${friendlyStage}</span></p>
+                            </div>
+
+                            <p style="color: #4b5563; line-height: 1.6;">
+                                ${status === 'active'
+                        ? 'Congratulations! Your investment is now active. You will receive your official certificate shortly.'
+                        : status === 'rejected'
+                            ? 'Unfortunately, your investment application has been declined at this time. Please contact support for more details.'
+                            : 'Our team has moved your application to the next review stage. We will continue to keep you updated on its progress.'}
+                            </p>
+                            
+                            <p style="color: #4b5563; margin-bottom: 0;">Thank you for your patience,<br/><strong>Nolt Finance Team</strong></p>
+                        </div>
+                    </div>
+                `
+            });
+            return { id: 'zepto-sent', ...(resp as any) };
+        } catch (error: any) {
+            console.error("Zepto Service Error (Investment Stage Update):", error);
             return { error: error.message };
         }
     }

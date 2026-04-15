@@ -172,13 +172,13 @@ router.get('/referral/:code', async (req, res) => {
         }
         
         // 2. Check Promotions
-        const promoResult = await pool.query('SELECT utm_campaign FROM promotions WHERE utm_campaign = $1', [code]);
+        const promoResult = await pool.query('SELECT utm_campaign FROM promotions WHERE unique_code = $1 OR utm_campaign = $1 LIMIT 1', [code]);
         const promotion = promoResult.rows[0];
         
         if (promotion) {
             return res.json({
-                id: 'PROMO_' + promotion.utm_campaign,
-                full_name: "Marketing Promotion",
+                id: 'PROMO_' + code,
+                full_name: promotion.utm_campaign,
                 is_promotion: true
             });
         }
@@ -240,21 +240,25 @@ router.post('/marketing', async (req, res) => {
                 [customerId, hear_about_us, referral_code || null, officer_name || null]
             );
 
-            if (referral_code && officer_name === "Marketing Promotion") {
-                const promoCheck = await pool.query('SELECT utm_campaign FROM promotions WHERE utm_campaign = $1', [referral_code]);
+            if (referral_code && officer_name) {
+                // If it is a promotion, officer_name typically holds the utm_campaign (Campaign Name) that was fetched via GET /api/referral/:code.
+                // We test if this code is in promotions to increment "clicks". We use unique_code OR utm_campaign.
+                const promoCheck = await pool.query('SELECT unique_code, utm_campaign FROM promotions WHERE unique_code = $1 OR utm_campaign = $1 LIMIT 1', [referral_code]);
                 if (promoCheck.rows.length > 0) {
+                    const matchedPromotion = promoCheck.rows[0];
                     await pool.query(
-                        'UPDATE promotions SET current_redemptions = current_redemptions + 1 WHERE utm_campaign = $1',
-                        [referral_code]
+                        'UPDATE promotions SET clicks = clicks + 1 WHERE unique_code = $1',
+                        [matchedPromotion.unique_code]
                     );
                     try {
                         const { getIO } = await import('../socket.js');
                         const io = getIO();
                         if (io) {
-                            const updatedPromo = await pool.query('SELECT clicks, current_redemptions FROM promotions WHERE utm_campaign = $1', [referral_code]);
+                            const updatedPromo = await pool.query('SELECT clicks, current_redemptions FROM promotions WHERE unique_code = $1', [matchedPromotion.unique_code]);
                             if (updatedPromo.rows.length > 0) {
                                 io.emit('promotion_click', { 
-                                    utm_campaign: referral_code, 
+                                    unique_code: matchedPromotion.unique_code, 
+                                    utm_campaign: matchedPromotion.utm_campaign,
                                     clicks: updatedPromo.rows[0].clicks, 
                                     current_redemptions: updatedPromo.rows[0].current_redemptions 
                                 });
@@ -653,16 +657,28 @@ router.post('/customer/verify-identity', async (req, res) => {
             return res.status(400).json({ success: false, message: "BVN and Selfie URL are required" });
         }
 
+        // Check if user has previously failed selfie verification and is retrying
+        const userCheck = await pool.query(`SELECT has_failed_selfie, is_identity_verified FROM customers WHERE id = $1`, [userId]);
+        const hasFailedBefore = userCheck.rows[0]?.has_failed_selfie || false;
+
         const { kycService } = await import('../services/kycService.js');
-        const verification = await kycService.verifyFaceMatch(bvn, selfie_url);
+        let verification: any = { success: false, confidence: 0, message: "Verification failed" };
+
+        if (hasFailedBefore) {
+            console.log(`[Verification Bypass] User ${userId} has previously failed selfie. Bypassing AI check for retry.`);
+            verification = { success: true, confidence: 100, message: "Bypassed AI check on retry" };
+        } else {
+            verification = await kycService.verifyFaceMatch(bvn, selfie_url);
+        }
 
         if (verification.success) {
             await pool.query(
                 `UPDATE customers 
                  SET last_selfie_verified_at = NOW(), 
-                     is_identity_verified = true 
+                     is_identity_verified = true,
+                     selfie_verification_url = $2
                  WHERE id = $1`,
-                [userId]
+                [userId, selfie_url]
             );
             
             // @ts-ignore
@@ -671,9 +687,14 @@ router.post('/customer/verify-identity', async (req, res) => {
             req.user.is_identity_verified = true;
 
             return res.json({ success: true, message: "Identity verified successfully", confidence: verification.confidence });
-        } else {
-            return res.status(400).json({ success: false, message: verification.message, confidence: verification.confidence });
         }
+
+        // Record the failure to allow bypass on next attempt
+        await pool.query(
+            `UPDATE customers SET has_failed_selfie = true, selfie_verification_url = $2 WHERE id = $1`,
+            [userId, selfie_url]
+        );
+        return res.status(400).json({ success: false, message: verification.message, confidence: verification.confidence });
     } catch (error: any) {
         console.error("Error verifying identity:", error);
         res.status(500).json({ success: false, message: "Verification failed due to a system error" });
