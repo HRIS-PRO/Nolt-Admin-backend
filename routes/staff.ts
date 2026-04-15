@@ -1839,7 +1839,7 @@ router.put('/investments/:id/action', isAuthenticated, isStaff, async (req: Auth
         const role = user.role;
 
         const investmentRes = await pool.query(`
-            SELECT i.status, i.stage, i.customer_id, i.rep_full_name, i.company_name, i.customer_name, 
+            SELECT i.status, i.stage, i.customer_id, i.rep_full_name, i.company_name, 
                    c.email as cust_email, c.full_name as cust_full_name 
             FROM investments i
             LEFT JOIN customers c ON i.customer_id = c.id
