@@ -2781,7 +2781,8 @@ router.get('/loans/:id', async (req, res) => {
                 l.disb_date,
                 p.utm_source as promotion_source, p.utm_medium as promotion_medium, p.utm_campaign as promotion_campaign,
                 m.hear_about_us, m.referral_code as marketing_referral, m.officer_name as marketing_officer,
-                up.is_identity_verified, l.buy_over_amount, l.topup_amount, l.casa,
+                up.is_identity_verified, l.buy_over_amount, l.topup_amount, l.casa, 
+                l.buy_over_company_name, l.buy_over_company_account_name, l.buy_over_company_account_number,    
 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
