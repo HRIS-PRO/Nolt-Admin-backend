@@ -16,7 +16,8 @@ export const pdfService = {
     dateString: string,
     planName: string,
     signatureBase64: string, // e.g., 'data:image/png;base64,iVBORw0KGgo...'
-    investmentId: string | number
+    investmentId: string | number,
+    productType: 'investment' | 'loan' = 'investment'
   ): Promise<string | null> => {
     return new Promise(async (resolve, reject) => {
       try {
@@ -129,7 +130,8 @@ export const pdfService = {
         doc.on('end', async () => {
           try {
             const pdfData = Buffer.concat(buffers);
-            const fileName = `investments/${investmentId}/indemnity_agreement_${Date.now()}.pdf`;
+            const prefix = productType === 'loan' ? 'loans' : 'investments';
+            const fileName = `${prefix}/${investmentId}/indemnity_agreement_${Date.now()}.pdf`;
 
             const { data, error } = await supabase.storage
               .from('Nolt Storage')

@@ -1493,7 +1493,7 @@ router.get('/loans', async (req, res) => {
             SELECT 
                 l.id, l.applicant_full_name, l.requested_loan_amount, l.created_at, l.status, l.stage, l.product_type,
                 l.loan_type, l.topup_amount, l.buy_over_amount, l.disbursement_amount, l.disb_date,
-                c.full_name as officer_name, c.email as officer_email, l.sales_officer_id,
+                c.full_name as officer_name, c.email as officer_email, l.sales_officer_id, l.indemnity_document_url,
                 p.utm_source as promotion_source
             FROM loans l
             LEFT JOIN customers c ON l.sales_officer_id = c.id
@@ -1821,6 +1821,70 @@ router.post('/investments/:id/indemnity', isStaff, async (req, res) => {
     } catch (error) {
         console.error("Error processing indemnity:", error);
         res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+/**
+ * @swagger
+ * /api/staff/loans/{id}/indemnity:
+ *   post:
+ *     summary: Upload or generate an indemnity document for a loan
+ *     tags: [Staff]
+ */
+router.post('/loans/:id/indemnity', isStaff, async (req, res) => {
+    const { id } = req.params;
+    const { signature_base64, indemnity_document_url } = req.body;
+    // @ts-ignore
+    const user = req.user as any;
+
+    try {
+        let finalUrl = indemnity_document_url;
+
+        // If a signature BASE64 is provided, generate a PDF
+        if (signature_base64) {
+            const loanRes = await pool.query('SELECT * FROM loans WHERE id = $1', [id]);
+            if (loanRes.rows.length === 0) return res.status(404).json({ message: "Loan not found" });
+
+            const loan = loanRes.rows[0];
+            const fullName = loan.applicant_full_name || `${loan.surname} ${loan.first_name}`;
+            
+            finalUrl = await pdfService.generateAndUploadIndemnityPdf(
+                fullName,
+                loan.personal_email || '',
+                '', // alternate email
+                new Date().toLocaleDateString('en-GB'),
+                loan.loan_type || 'Loan Application',
+                signature_base64,
+                id,
+                'loan'
+            );
+        }
+
+        if (!finalUrl) {
+            return res.status(400).json({ message: "No document or signature provided for indemnity." });
+        }
+
+        // Update loan record
+        await pool.query(
+            'UPDATE loans SET indemnity_document_url = $1, updated_at = NOW() WHERE id = $2',
+            [finalUrl, id]
+        );
+
+        // Activity Log
+        await pool.query(
+            `INSERT INTO loan_activities (loan_id, user_id, action_type, description, metadata) 
+             VALUES ($1, $2, 'indemnity_signed', $3, $4)`,
+            [id, user.id, `Indemnity agreement signed/uploaded via representative.`, JSON.stringify({ signedBy: user.email })]
+        );
+
+        res.json({
+            message: "Indemnity Agreement finalized.",
+            document_url: finalUrl
+        });
+
+    } catch (error: any) {
+        console.error("Error processing loan indemnity:", error);
+        res.status(500).json({ message: "Error processing indemnity", error: error.message });
     }
 });
 
@@ -2703,7 +2767,7 @@ router.get('/loans/:id', async (req, res) => {
                 l.gender, l.date_of_birth, l.marital_status, l.religion, l.mothers_maiden_name, l.is_politically_exposed, l.title,
                 l.mobile_number, l.personal_email, l.primary_home_address, l.residential_status, l.state_of_residence, l.state_of_origin,
                 l.average_monthly_income, l.number_of_dependents, l.has_active_loans,
-                l.mda_tertiary, l.ippis_number, l.staff_id,
+                l.mda_tertiary, l.ippis_number, l.staff_id, l.indemnity_document_url,
                 l.govt_id_url, l.statement_of_account_url, l.proof_of_residence_url, l.selfie_verification_url,
                 l.work_id_url, l.payslip_url, -- Added missing docs
                 l.customer_references, l.signatures, l.updated_at, l.eligible_amount, l.sales_officer_id,
@@ -2717,7 +2781,7 @@ router.get('/loans/:id', async (req, res) => {
                 l.disb_date,
                 p.utm_source as promotion_source, p.utm_medium as promotion_medium, p.utm_campaign as promotion_campaign,
                 m.hear_about_us, m.referral_code as marketing_referral, m.officer_name as marketing_officer,
-                up.is_identity_verified,
+                up.is_identity_verified, l.buy_over_amount, l.topup_amount, l.casa,
 
                 c.full_name as officer_name, c.email as officer_email, c.avatar_url as officer_avatar
             FROM loans l
@@ -3159,7 +3223,7 @@ router.post('/loans/:id/action', async (req, res) => {
 
     // --- Validate and Sanitize Numeric Data Fields ---
     if (data && typeof data === 'object') {
-        const dataNumericFields = ['eligible_amount', 'tenure', 'disbursement_amount', 'existing_loan_balance'];
+        const dataNumericFields = ['eligible_amount', 'tenure', 'disbursement_amount', 'existing_loan_balance', 'buy_over_amount'];
         for (const field of dataNumericFields) {
             if (data[field] !== undefined && data[field] !== null && data[field] !== '' && data[field] !== 'null') {
                 const num = Number(data[field]);
@@ -3270,6 +3334,10 @@ router.post('/loans/:id/action', async (req, res) => {
                     updates.push(`existing_loan_balance = $${paramIndex++}`);
                     values.push(data.existing_loan_balance);
                 }
+                if (data?.buy_over_amount !== undefined) {
+                    updates.push(`buy_over_amount = $${paramIndex++}`);
+                    values.push(data.buy_over_amount);
+                }
                 nextStage = 'credit_check_2';
             }
             if (action === 'return') nextStage = getReturnStage('customer_experience');
@@ -3309,6 +3377,10 @@ router.post('/loans/:id/action', async (req, res) => {
                 if (data?.existing_loan_balance !== undefined) {
                     updates.push(`existing_loan_balance = $${paramIndex++}`);
                     values.push(data.existing_loan_balance);
+                }
+                if (data?.buy_over_amount !== undefined) {
+                    updates.push(`buy_over_amount = $${paramIndex++}`);
+                    values.push(data.buy_over_amount);
                 }
 
                 nextStage = 'internal_audit';
