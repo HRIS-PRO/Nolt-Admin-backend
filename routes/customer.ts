@@ -2,6 +2,7 @@ import { Router } from 'express';
 import pool from '../config/db.js';
 import { zeptoService as resendService } from '../services/zeptoService.js';
 import { getIO } from '../socket.js';
+import { pdfService } from '../services/pdfService.js';
 
 const router = Router();
 
@@ -402,7 +403,7 @@ router.post('/loans', async (req, res) => {
                 // References
                 references, // Should be an array of objects
                 // Loan Details
-                requested_loan_amount, loan_tenure_months, signatures, mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount, bank_name, account_number, account_name
+                requested_loan_amount, loan_tenure_months, signatures, mda_tertiary, ippis_number, staff_id, referral_code, eligible_amount, bank_name, account_number, account_name, loan_type
             } = req.body;
 
             // Validate Mandatory Fields
@@ -553,7 +554,37 @@ router.post('/loans', async (req, res) => {
                 console.error("Socket emit failed:", socketError);
             }
 
-            res.status(201).json({ message: "Loan application submitted successfully", loanId: loan.id });
+            // Generate Indemnity Agreement PDF if signatures exist
+            let indemnityUrl = null;
+            if (signatures && signatures.length > 0) {
+                try {
+                    console.log("Generating Loan Indemnity PDF...");
+                    const fullName = applicant_full_name || `${surname} ${first_name}`;
+                    indemnityUrl = await pdfService.generateAndUploadIndemnityPdf(
+                        fullName,
+                        personal_email || '',
+                        '', // alternate email (optional)
+                        new Date().toLocaleDateString('en-GB'),
+                        loan_type || 'Loan Application',
+                        signatures[0],
+                        loan.id,
+                        'loan'
+                    );
+                    
+                    if (indemnityUrl) {
+                        await pool.query('UPDATE loans SET indemnity_document_url = $1 WHERE id = $2', [indemnityUrl, loan.id]);
+                        loan.indemnity_document_url = indemnityUrl;
+                    }
+                } catch (pdfError) {
+                    console.error("Failed to generate loan indemnity PDF:", pdfError);
+                }
+            }
+
+            res.status(201).json({ 
+                message: "Loan application submitted successfully", 
+                loanId: loan.id,
+                indemnity_document_url: indemnityUrl 
+            });
 
         } catch (error: any) {
             console.error("Error submitting loan application:", error);
