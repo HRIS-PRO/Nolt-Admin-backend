@@ -1462,8 +1462,8 @@ router.get('/loans', async (req, res) => {
             values.push('finance');
         }
 
-        if (role === 'marketing' || role === 'customer_experience') {
-            // CX and Marketing are restricted to promo-attributed applications only.
+        if (role === 'marketing') {
+            // Marketing is restricted to promo-attributed applications only.
             filters.push(`p.utm_campaign IS NOT NULL`);
         }
 
@@ -1551,7 +1551,7 @@ router.get('/investments', async (req: any, res) => {
         
         const options = {
             officerId: role === 'sales_officer' ? req.user.id : undefined,
-            promoOnly: role === 'marketing' || role === 'customer_experience'
+            promoOnly: role === 'marketing'
         };
         
         const investments = await investmentService.getAllInvestments(options);
@@ -1610,7 +1610,7 @@ router.get('/investments/:id', async (req, res) => {
         }
 
         const investment = result.rows[0];
-        if ((role === 'marketing' || role === 'customer_experience') && !investment.promotion_source) {
+        if (role === 'marketing' && !investment.promotion_source) {
             return res.status(404).json({ message: "Investment not found" });
         }
 
@@ -2732,7 +2732,7 @@ router.get('/loans/:id', async (req, res) => {
         if (loans.rows.length === 0) {
             return res.status(404).json({ message: "Loan not found" });
         }
-        if ((role === 'marketing' || role === 'customer_experience') && !loans.rows[0].promotion_source) {
+        if (role === 'marketing' && !loans.rows[0].promotion_source) {
             return res.status(404).json({ message: "Loan not found" });
         }
 
