@@ -22,9 +22,9 @@ const isSuperAdmin = (req: any, res: any, next: any) => {
  */
 router.post('/', isSuperAdmin, async (req, res) => {
     try {
-        const { plan_name, currency, tenure_days, min_amount, max_amount, interest_rate } = req.body;
+        const { plan_name, currency, contribution_frequency, tenure_days, min_amount, max_amount, interest_rate } = req.body;
 
-        if (!plan_name || !currency || !tenure_days || !min_amount || !interest_rate) {
+        if (!plan_name || !currency || !contribution_frequency || !tenure_days || !min_amount || !interest_rate) {
             return res.status(400).json({ message: "Missing required fields" });
         }
 
@@ -38,6 +38,7 @@ router.post('/', isSuperAdmin, async (req, res) => {
         const isDuplicate = await yieldRateService.checkDuplicate({
             plan_name,
             currency,
+            contribution_frequency,
             min_amount: min,
             max_amount: max,
             interest_rate: parseFloat(interest_rate)
@@ -50,6 +51,7 @@ router.post('/', isSuperAdmin, async (req, res) => {
         const rate = await yieldRateService.createRate({
             plan_name,
             currency,
+            contribution_frequency,
             tenure_days: parseInt(tenure_days),
             min_amount: parseFloat(min_amount),
             max_amount: max_amount ? parseFloat(max_amount) : null,
@@ -106,14 +108,15 @@ router.get('/active', async (req, res) => {
  */
 router.get('/calculate', async (req, res) => {
     try {
-        const { plan, currency, amount, tenure } = req.query;
-        if (!plan || !currency || !amount || !tenure) {
+        const { plan, currency, contribution_frequency, amount, tenure } = req.query;
+        if (!plan || !currency || !contribution_frequency || !amount || !tenure) {
             return res.status(400).json({ message: "Missing required parameters" });
         }
 
         const rate = await yieldRateService.calculateRate({
             plan_name: plan as string,
             currency: currency as string,
+            contribution_frequency: contribution_frequency as string,
             amount: parseFloat(amount as string),
             tenure_days: parseInt(tenure as string)
         });
@@ -161,6 +164,7 @@ router.put('/:id', isSuperAdmin, async (req, res) => {
         const isDuplicate = await yieldRateService.checkDuplicate({
             plan_name: req.body.plan_name || existingRate.plan_name,
             currency: req.body.currency || existingRate.currency,
+            contribution_frequency: req.body.contribution_frequency || existingRate.contribution_frequency,
             min_amount: req.body.min_amount !== undefined ? parseFloat(req.body.min_amount) : existingRate.min_amount,
             max_amount: req.body.max_amount !== undefined ? (req.body.max_amount === null ? null : parseFloat(req.body.max_amount)) : existingRate.max_amount,
             interest_rate: req.body.interest_rate !== undefined ? parseFloat(req.body.interest_rate) : existingRate.interest_rate

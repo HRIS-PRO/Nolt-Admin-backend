@@ -4,6 +4,7 @@ export interface YieldRate {
     id?: number;
     plan_name: string;
     currency: string;
+    contribution_frequency: string;
     tenure_days: number;
     min_amount: number;
     max_amount: number | null;
@@ -19,15 +20,16 @@ export const yieldRateService = {
             SELECT id FROM yield_rates 
             WHERE plan_name = $1 
             AND currency = $2 
-            AND min_amount = $3 
-            AND interest_rate = $4
+            AND contribution_frequency = $3
+            AND min_amount = $4 
+            AND interest_rate = $5
         `;
-        const values: any[] = [data.plan_name, data.currency, data.min_amount, data.interest_rate];
+        const values: any[] = [data.plan_name, data.currency, data.contribution_frequency, data.min_amount, data.interest_rate];
 
         if (data.max_amount === null || data.max_amount === undefined) {
             query += ` AND max_amount IS NULL`;
         } else {
-            query += ` AND max_amount = $5`;
+            query += ` AND max_amount = $6`;
             values.push(data.max_amount);
         }
 
@@ -42,13 +44,14 @@ export const yieldRateService = {
 
     async createRate(data: Partial<YieldRate>) {
         const query = `
-            INSERT INTO yield_rates (plan_name, currency, tenure_days, min_amount, max_amount, interest_rate)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO yield_rates (plan_name, currency, contribution_frequency, tenure_days, min_amount, max_amount, interest_rate)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *;
         `;
         const values = [
             data.plan_name,
             data.currency,
+            data.contribution_frequency,
             data.tenure_days,
             data.min_amount,
             data.max_amount,
@@ -75,18 +78,20 @@ export const yieldRateService = {
             UPDATE yield_rates
             SET plan_name = COALESCE($1, plan_name),
                 currency = COALESCE($2, currency),
-                tenure_days = COALESCE($3, tenure_days),
-                min_amount = COALESCE($4, min_amount),
-                max_amount = $5, -- Allow explicit NULL for infinity
-                interest_rate = COALESCE($6, interest_rate),
-                is_active = COALESCE($7, is_active),
+                contribution_frequency = COALESCE($3, contribution_frequency),
+                tenure_days = COALESCE($4, tenure_days),
+                min_amount = COALESCE($5, min_amount),
+                max_amount = $6, -- Allow explicit NULL for infinity
+                interest_rate = COALESCE($7, interest_rate),
+                is_active = COALESCE($8, is_active),
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $8
+            WHERE id = $9
             RETURNING *;
         `;
         const values = [
             data.plan_name,
             data.currency,
+            data.contribution_frequency,
             data.tenure_days,
             data.min_amount,
             data.max_amount,
@@ -110,19 +115,20 @@ export const yieldRateService = {
         return result.rows;
     },
 
-    async calculateRate(params: { plan_name: string, currency: string, amount: number, tenure_days: number }) {
+    async calculateRate(params: { plan_name: string, currency: string, contribution_frequency: string, amount: number, tenure_days: number }) {
         const query = `
             SELECT * FROM yield_rates 
             WHERE (plan_name ILIKE '%' || $1 || '%')
             AND currency = $2 
-            AND tenure_days >= $3 
+            AND contribution_frequency = $3
+            AND tenure_days >= $4 
             AND is_active = TRUE
-            AND $4 >= min_amount 
-            AND (max_amount IS NULL OR $4 <= max_amount)
+            AND $5 >= min_amount 
+            AND (max_amount IS NULL OR $5 <= max_amount)
             ORDER BY tenure_days ASC, created_at DESC 
             LIMIT 1;
         `;
-        const values = [params.plan_name, params.currency, params.tenure_days, params.amount];
+        const values = [params.plan_name, params.currency, params.contribution_frequency, params.tenure_days, params.amount];
         const result = await pool.query(query, values);
         return result.rows[0];
     }
