@@ -22,10 +22,16 @@ const isSuperAdmin = (req: any, res: any, next: any) => {
  */
 router.post('/', isSuperAdmin, async (req, res) => {
     try {
-        const { plan_name, currency, contribution_frequency, tenure_days, min_amount, max_amount, interest_rate } = req.body;
+        const { plan_name, currency, contribution_frequency, payout_frequency, tenure_days, min_amount, max_amount, interest_rate } = req.body;
 
-        if (!plan_name || !currency || !contribution_frequency || !tenure_days || !min_amount || !interest_rate) {
+        if (!plan_name || !currency || !tenure_days || !min_amount || !interest_rate) {
             return res.status(400).json({ message: "Missing required fields" });
+        }
+        
+        const freq = payout_frequency || contribution_frequency;
+        const isVault = plan_name.toUpperCase().includes('VAULT');
+        if (isVault && !freq) {
+             return res.status(400).json({ message: "Missing payout_frequency for Vault plan" });
         }
 
         const min = parseFloat(min_amount);
@@ -51,7 +57,7 @@ router.post('/', isSuperAdmin, async (req, res) => {
         const rate = await yieldRateService.createRate({
             plan_name,
             currency,
-            contribution_frequency,
+            contribution_frequency: isVault ? freq : null,
             tenure_days: parseInt(tenure_days),
             min_amount: parseFloat(min_amount),
             max_amount: max_amount ? parseFloat(max_amount) : null,
@@ -108,15 +114,21 @@ router.get('/active', async (req, res) => {
  */
 router.get('/calculate', async (req, res) => {
     try {
-        const { plan, currency, contribution_frequency, amount, tenure } = req.query;
-        if (!plan || !currency || !contribution_frequency || !amount || !tenure) {
+        const { plan, currency, contribution_frequency, payout_frequency, amount, tenure } = req.query;
+        if (!plan || !currency || !amount || !tenure) {
             return res.status(400).json({ message: "Missing required parameters" });
+        }
+        
+        const freq = payout_frequency || contribution_frequency;
+        const isVault = (plan as string).toUpperCase().includes('VAULT');
+        if (isVault && !freq) {
+            return res.status(400).json({ message: "Missing payout_frequency for Vault plan" });
         }
 
         const rate = await yieldRateService.calculateRate({
             plan_name: plan as string,
             currency: currency as string,
-            contribution_frequency: contribution_frequency as string,
+            ...(freq ? { contribution_frequency: freq as string } : {}),
             amount: parseFloat(amount as string),
             tenure_days: parseInt(tenure as string)
         });
@@ -161,10 +173,11 @@ router.put('/:id', isSuperAdmin, async (req, res) => {
             return res.status(404).json({ message: "Rate not found" });
         }
 
+        const freq = req.body.payout_frequency || req.body.contribution_frequency;
         const isDuplicate = await yieldRateService.checkDuplicate({
             plan_name: req.body.plan_name || existingRate.plan_name,
             currency: req.body.currency || existingRate.currency,
-            contribution_frequency: req.body.contribution_frequency || existingRate.contribution_frequency,
+            contribution_frequency: freq !== undefined ? freq : existingRate.contribution_frequency,
             min_amount: req.body.min_amount !== undefined ? parseFloat(req.body.min_amount) : existingRate.min_amount,
             max_amount: req.body.max_amount !== undefined ? (req.body.max_amount === null ? null : parseFloat(req.body.max_amount)) : existingRate.max_amount,
             interest_rate: req.body.interest_rate !== undefined ? parseFloat(req.body.interest_rate) : existingRate.interest_rate
@@ -174,7 +187,9 @@ router.put('/:id', isSuperAdmin, async (req, res) => {
             return res.status(409).json({ message: "Another rate with the same plan, range, and interest already exists." });
         }
 
-        const rate = await yieldRateService.updateRate(id, req.body);
+        const updateData = { ...req.body };
+        if (freq !== undefined) updateData.contribution_frequency = freq;
+        const rate = await yieldRateService.updateRate(id, updateData);
         if (!rate) {
             return res.status(404).json({ message: "Rate not found" });
         }

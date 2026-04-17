@@ -20,16 +20,22 @@ export const yieldRateService = {
             SELECT id FROM yield_rates 
             WHERE plan_name = $1 
             AND currency = $2 
-            AND contribution_frequency = $3
-            AND min_amount = $4 
-            AND interest_rate = $5
+            AND min_amount = $3 
+            AND interest_rate = $4
         `;
-        const values: any[] = [data.plan_name, data.currency, data.contribution_frequency, data.min_amount, data.interest_rate];
+        const values: any[] = [data.plan_name, data.currency, data.min_amount, data.interest_rate];
+
+        if (data.contribution_frequency) {
+            query += ` AND contribution_frequency = $${values.length + 1}`;
+            values.push(data.contribution_frequency);
+        } else {
+            query += ` AND (contribution_frequency IS NULL OR contribution_frequency = 'monthly')`;
+        }
 
         if (data.max_amount === null || data.max_amount === undefined) {
             query += ` AND max_amount IS NULL`;
         } else {
-            query += ` AND max_amount = $6`;
+            query += ` AND max_amount = $${values.length + 1}`;
             values.push(data.max_amount);
         }
 
@@ -115,20 +121,24 @@ export const yieldRateService = {
         return result.rows;
     },
 
-    async calculateRate(params: { plan_name: string, currency: string, contribution_frequency: string, amount: number, tenure_days: number }) {
-        const query = `
+    async calculateRate(params: { plan_name: string, currency: string, contribution_frequency?: string, amount: number, tenure_days: number }) {
+        let query = `
             SELECT * FROM yield_rates 
             WHERE (plan_name ILIKE '%' || $1 || '%')
             AND currency = $2 
-            AND contribution_frequency = $3
-            AND tenure_days >= $4 
+            AND tenure_days >= $3 
             AND is_active = TRUE
-            AND $5 >= min_amount 
-            AND (max_amount IS NULL OR $5 <= max_amount)
-            ORDER BY tenure_days ASC, created_at DESC 
-            LIMIT 1;
+            AND $4 >= min_amount 
+            AND (max_amount IS NULL OR $4 <= max_amount)
         `;
-        const values = [params.plan_name, params.currency, params.contribution_frequency, params.tenure_days, params.amount];
+        const values: any[] = [params.plan_name, params.currency, params.tenure_days, params.amount];
+
+        if (params.contribution_frequency) {
+            query += ` AND contribution_frequency = $${values.length + 1}`;
+            values.push(params.contribution_frequency);
+        }
+
+        query += ` ORDER BY tenure_days ASC, created_at DESC LIMIT 1;`;
         const result = await pool.query(query, values);
         return result.rows[0];
     }
