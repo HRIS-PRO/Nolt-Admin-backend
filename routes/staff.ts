@@ -1050,17 +1050,17 @@ router.get('/reports/tat-summary', async (req, res) => {
         // 1. Fetch Basic Metrics
         const table = isLoan ? 'loans' : 'investments';
         const amountField = isLoan ? 'requested_loan_amount' : 'investment_amount';
-        const approvedStatus = isLoan ? 'disbursed' : 'active';
+        const approvedStatuses = isLoan ? "('approved', 'disbursed')" : "('approved', 'active')";
 
         const metricsRes = await pool.query(`
             SELECT 
-                COUNT(*) FILTER (WHERE status = $1) as approved_count,
-                COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
+                COUNT(*) FILTER (WHERE status IN ${approvedStatuses}) as approved_count,
+                COUNT(*) FILTER (WHERE status NOT IN ${approvedStatuses} AND status != 'rejected') as pending_count,
                 COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
-                SUM(${amountField}) FILTER (WHERE status IN ($1, 'pending')) as total_volume
+                SUM(${amountField}) as total_volume
             FROM ${table}
             ${dateFilter ? `WHERE ${dateFilter}` : ''}
-        `, [approvedStatus]);
+        `);
 
         const metrics = metricsRes.rows[0];
 
@@ -1172,12 +1172,12 @@ router.get('/reports/tat-summary', async (req, res) => {
                         stageVolume[nextStage]++;
                     }
 
-                    // Track daily approvals reaching final stage
-                    if (nextStage === 'finance' || nextStage === 'finance_stage' || (act.action_type === 'approve' && !isLoan)) {
+                    // Track daily volume across all stages (formerly just final approvals)
+                    if (nextStage !== 'unknown' && nextStage !== currentStage) {
                         const day = getDay(actDate);
                         if (!dailyApprovals[day]) dailyApprovals[day] = { new: 0, spillover: 0 };
                         
-                        // Spillover logic: if created more than 48h before reaching finance
+                        // Spillover logic: if created more than 48h prior to this action
                         const appCreated = new Date(app.created_at);
                         const isSpillover = (actDate.getTime() - appCreated.getTime()) / (1000 * 60 * 60) > 48;
                         if (isSpillover) dailyApprovals[day].spillover++;
@@ -3410,14 +3410,20 @@ router.post('/loans/:id/action', async (req, res) => {
         }
 
         // 5. Finance -> Disbursed (Final Approval)
-        else if (currentStage === 'finance') {
-            if (!canAct('finance', 'finance')) {
+        else if (currentStage === 'finance' || currentStage === 'finance_stage') {
+            if (!canAct('finance', currentStage)) {
                 return res.status(403).json({ message: "Only Finance can process this stage" });
             }
             if (action === 'approve') {
                 nextStage = 'disbursed';
                 updates.push(`status = $${paramIndex++}`); // Final status
                 values.push('disbursed');
+                
+                // Allow finance to update the buy_over_amount directly before disbursement
+                if (data?.buy_over_amount !== undefined) {
+                    updates.push(`buy_over_amount = $${paramIndex++}`);
+                    values.push(data.buy_over_amount);
+                }
             }
             if (action === 'return') {
                 nextStage = getReturnStage('internal_audit');

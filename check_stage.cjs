@@ -1,0 +1,1 @@
+require('dotenv').config(); const { Pool } = require('pg'); const pool = new Pool(); pool.query("SELECT id, stage, loan_type, status FROM loans WHERE loan_type ILIKE '%buy%over%'", (err, res) => { if (err) console.error(err); else console.log(res.rows); pool.end(); });
